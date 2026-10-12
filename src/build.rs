@@ -285,6 +285,38 @@ pub fn relpath(p: &Path, start: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Python `Path(s).expanduser().resolve()` for user-typed paths.
+pub fn resolve_user_path(s: &str) -> PathBuf {
+    let p = match s.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => dirs::home_dir()
+            .unwrap_or_default()
+            .join(rest.trim_start_matches('/')),
+        _ => PathBuf::from(s),
+    };
+    resolve(&p)
+}
+
+/// Python `Path.resolve()` (non-strict): canonicalize the longest existing prefix,
+/// then append the rest normalized.
+pub fn resolve(p: &Path) -> PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let abs = normpath(&abs);
+    let mut tail = Vec::new();
+    let mut head = abs.as_path();
+    loop {
+        if let Ok(c) = head.canonicalize() {
+            return tail.iter().rev().fold(c, |acc: PathBuf, t| acc.join(t));
+        }
+        match (head.parent(), head.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_os_string());
+                head = parent;
+            }
+            _ => return abs,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
