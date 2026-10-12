@@ -142,7 +142,7 @@ fn bad_block_size_and_mode_are_usage_errors() {
         assert!(text(&o.stderr).contains("error"), "{}", text(&o.stderr));
     }
     let o = cli(&["tv", "--block-size", "0"], t.path());
-    assert!(text(&o.stderr).contains("must be a positive integer, got 0"));
+    assert!(text(&o.stderr).contains("0 is not in 1.."));
     let o = cli(&["tv", "--interleave", "weekly"], t.path());
     assert_eq!(o.status.code(), Some(2));
 }

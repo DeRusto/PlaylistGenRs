@@ -163,7 +163,7 @@ cargo test --test parity
 - When sorting episodes, paths are compared one folder at a time. Python flattens the whole
   path into one key, which can raise a `TypeError` on unusual names. For normal layouts the
   order is the same.
-- Only ASCII digits count as numbers in natural sort.
+- Natural sort uses the `natord` crate: only ASCII digits count as numbers, and `ep01` and `ep1` are not treated as equal.
 - The layout file is written as UTF-8 instead of `\u` escapes. Both programs read either form.
 - Autosave doesn't overwrite a layout file that failed to load.
 - The text menu shows build warnings in its own output instead of on stderr.

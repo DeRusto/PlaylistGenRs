@@ -8,6 +8,5 @@ pub mod cli;
 pub mod gui;
 pub mod interleave;
 pub mod layout;
-pub mod natsort;
 pub mod scan;
 pub mod tui;

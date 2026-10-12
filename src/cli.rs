@@ -50,19 +50,8 @@ struct Args {
     interleave_mode: Mode,
 
     /// Episodes per show per round for --interleave episodes (default: 10)
-    #[arg(long, value_name = "N", value_parser = positive_int)]
+    #[arg(long, value_name = "N", value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     block_size: Option<usize>,
-}
-
-fn positive_int(s: &str) -> Result<usize, String> {
-    let n: i64 = s
-        .trim()
-        .parse()
-        .map_err(|_| format!("invalid int value: '{s}'"))?;
-    usize::try_from(n)
-        .ok()
-        .filter(|&n| n > 0)
-        .ok_or_else(|| format!("must be a positive integer, got {n}"))
 }
 
 /// Process entry point; returns the exit code.

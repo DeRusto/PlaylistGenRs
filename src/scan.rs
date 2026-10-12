@@ -2,7 +2,8 @@
 //!
 //! Warnings are pushed onto a caller-supplied `Vec<String>` instead of printed.
 
-use crate::natsort::{name_key, natural_key, path_key};
+use natord::compare_ignore_case;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -91,24 +92,41 @@ pub fn scan_dirs(dirs: &[PathBuf], warnings: &mut Vec<String>) -> Vec<(String, V
     shows
 }
 
-/// Recursive video files under `base`, paired with their sort key relative to `base`.
+fn name_cmp(a: &Path, b: &Path) -> Ordering {
+    let name = |p: &Path| {
+        p.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    };
+    compare_ignore_case(&name(a), &name(b))
+}
+
+/// Natural order, compared component by component.
+fn path_cmp(a: &Path, b: &Path) -> Ordering {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| compare_ignore_case(&x.to_string_lossy(), &y.to_string_lossy()))
+        .find(|o| o.is_ne())
+        .unwrap_or_else(|| a.iter().count().cmp(&b.iter().count()))
+}
+
+/// Recursive video files under `base`, paired with their path relative to `base`.
 /// Like Python's `rglob`, unreadable subdirectories are skipped silently and directory
 /// symlinks are not followed.
-fn videos_under(
-    base: &Path,
-) -> impl Iterator<Item = (Vec<Vec<crate::natsort::Token>>, PathBuf)> + '_ {
+fn videos_under(base: &Path) -> impl Iterator<Item = (PathBuf, PathBuf)> + '_ {
     WalkDir::new(base)
         .min_depth(1)
         .into_iter()
         .filter_map(Result::ok)
         .map(|e| e.into_path())
         .filter(|p| is_video(p))
-        .map(move |p| (path_key(&p, base), p))
+        .map(move |p| (p.strip_prefix(base).unwrap_or(&p).to_path_buf(), p))
 }
 
 fn sorted_videos<'a>(bases: impl IntoIterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
     let mut all: Vec<_> = bases.into_iter().flat_map(|b| videos_under(b)).collect();
-    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all.sort_by(|a, b| path_cmp(&a.0, &b.0));
     all.into_iter().map(|(_, p)| p).collect()
 }
 
@@ -126,10 +144,10 @@ pub fn collect_show_seasons(paths: &[PathBuf], warnings: &mut Vec<String>) -> Ve
         .flat_map(|d| read_dir_warn(d, warnings))
         .filter(|p| is_video(p))
         .collect();
-    direct.sort_by_key(|p| name_key(p));
+    direct.sort_by(|a, b| name_cmp(a, b));
 
     let mut subdirs = subdirs_merged(paths, warnings);
-    subdirs.sort_by_key(|(name, _)| natural_key(name));
+    subdirs.sort_by(|a, b| compare_ignore_case(&a.0, &b.0));
 
     let mut seasons = Vec::new();
     if !direct.is_empty() {
@@ -159,4 +177,27 @@ pub fn refresh_shows(dirs: &[PathBuf], warnings: &mut Vec<String>) -> Vec<ShowIn
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_cmp_is_natural_per_component() {
+        let mut v = vec![
+            Path::new("Season 10/e1.mkv"),
+            Path::new("season 2/e10.mkv"),
+            Path::new("Season 2/e9.mkv"),
+        ];
+        v.sort_by(|a, b| path_cmp(a, b));
+        assert_eq!(
+            v,
+            [
+                Path::new("Season 2/e9.mkv"),
+                Path::new("season 2/e10.mkv"),
+                Path::new("Season 10/e1.mkv"),
+            ]
+        );
+    }
 }
