@@ -144,3 +144,14 @@ fn eof_exits_cleanly_anywhere() {
         drive(&t.path().join("l.json"), script);
     }
 }
+
+#[test]
+fn eof_inside_submenu_keeps_edits() {
+    let t = TempDir::new().unwrap();
+    let tv = t.path().join("tv");
+    tree(&tv, &[("A", &["a.mkv"]), ("B", &["b.mkv"])]);
+    let lf = t.path().join("l.json");
+    drive(&lf, &format!("a\n{}\nw\n1\n", tv.display()));
+    let s = LayoutStore::new(lf).get_layout(LAST_SESSION).unwrap();
+    assert_eq!(s.selected, ["B"]);
+}

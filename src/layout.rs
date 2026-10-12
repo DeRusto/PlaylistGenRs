@@ -157,10 +157,23 @@ impl LayoutStore {
         Ok(())
     }
 
+    /// The layout `name`. Fields with values this version can't read (e.g. a hand-edited
+    /// `"show_order": "bogus"`) fall back to their defaults instead of losing the whole layout.
     pub fn get_layout(&self, name: &str) -> Option<State> {
-        self.layouts
-            .get(name)
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        let Value::Object(obj) = self.layouts.get(name)? else {
+            return None;
+        };
+        let readable: Map<String, Value> = obj
+            .iter()
+            .filter(|(k, v)| serde_json::from_value::<State>(json!({ k.as_str(): v })).is_ok())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        serde_json::from_value(Value::Object(readable)).ok()
+    }
+
+    /// True when the file on disk exists but couldn't be parsed (and hasn't been saved over).
+    pub fn load_failed(&self) -> bool {
+        self.load_failed
     }
 
     /// Store `state` under `name`, make it active, and write the file.

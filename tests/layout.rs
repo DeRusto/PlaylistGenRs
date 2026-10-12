@@ -246,3 +246,19 @@ fn selected_list_in_show_order() {
     let sel: HashSet<String> = sv(&["Z", "B", "A"]).into_iter().collect();
     assert_eq!(selected_list(&sel, &info(&["A", "B"])), ["A", "B", "Z"]);
 }
+
+#[test]
+fn unreadable_field_keeps_rest_of_layout() {
+    let t = TempDir::new().unwrap();
+    let f = t.path().join("l.json");
+    fs::write(
+        &f,
+        r#"{"layouts": {"A": {"dirs": ["/tv"], "show_order": "bogus", "relative": true}}, "active_layout_name": "A"}"#,
+    )
+    .unwrap();
+    let s = LayoutStore::new(f).get_active_state().unwrap();
+    assert_eq!(
+        (s.dirs, s.show_order, s.relative),
+        (sv(&["/tv"]), ShowOrder::Alpha, true)
+    );
+}

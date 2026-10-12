@@ -17,7 +17,10 @@ pub fn run_menu(input: &mut impl BufRead, out: &mut impl Write) -> i32 {
 /// Run the menu with an explicit store. Quits with 0 on `q` or end of input.
 pub fn run_menu_with(store: LayoutStore, input: &mut impl BufRead, out: &mut impl Write) -> i32 {
     let mut m = Menu::new(store, input, out);
-    let _ = m.main_loop();
+    // End of input (Ctrl-D) can land inside a submenu before its edits are saved.
+    if m.main_loop().is_none() {
+        m.save_state();
+    }
     0
 }
 

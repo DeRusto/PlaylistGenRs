@@ -1,7 +1,7 @@
 //! GUI state and actions, kept free of egui so they can be unit tested.
 //! Mirrors the Python `InterleaverGUI` methods; rendering lives in `app.rs`.
 
-use crate::build::{BuildOptions, Mode, ShowOrder, resolve, resolve_user_path};
+use crate::build::{BuildOptions, BuildReport, Mode, ShowOrder, resolve, resolve_user_path};
 use crate::layout::{self, LayoutStore, State};
 use crate::scan::{ShowInfo, refresh_shows};
 use std::collections::HashSet;
@@ -388,7 +388,8 @@ impl GuiState {
         })
     }
 
-    pub fn generation_done(&mut self, output: &std::path::Path, entries: usize) -> Msg {
+    pub fn generation_done(&mut self, output: &std::path::Path, r: &BuildReport) -> Msg {
+        let entries = r.entries;
         if entries > 0 {
             let name = output.file_name().unwrap_or_default().to_string_lossy();
             self.status = format!("Generated {entries} entries into: {name}");
@@ -402,11 +403,12 @@ impl GuiState {
             )
         } else {
             self.status = "No playlist generated.".into();
-            msg(
-                Kind::Warning,
-                "No Playlist Generated",
-                "No video files were found matching your parameters.",
-            )
+            // A write failure is worth naming; everything else means nothing matched.
+            let text = match r.error.as_deref() {
+                Some(e) if e.starts_with("Error writing playlist") => e,
+                _ => "No video files were found matching your parameters.",
+            };
+            msg(Kind::Warning, "No Playlist Generated", text)
         }
     }
 
@@ -427,7 +429,10 @@ impl GuiState {
         self.mode = Mode::None;
         self.block_size = "10".into();
         self.store.active_layout_name = None;
-        if let Err(e) = self.store.save_all() {
+        // Don't replace an unreadable layout file without an explicit save.
+        if !self.store.load_failed()
+            && let Err(e) = self.store.save_all()
+        {
             eprintln!("{e}");
         }
         self.status = "Created new layout.".into();
@@ -670,7 +675,7 @@ mod tests {
         assert_eq!(s.status, "Generating playlist...");
 
         let r = crate::build::build_playlist(&job.dirs, &job.output, &job.opts, &mut rand::rng());
-        let m = s.generation_done(&job.output, r.entries);
+        let m = s.generation_done(&job.output, &r);
         assert_eq!(m.title, "Success");
         assert_eq!(s.status, "Generated 1 entries into: interleaved.m3u");
     }

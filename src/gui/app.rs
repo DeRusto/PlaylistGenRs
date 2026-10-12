@@ -99,7 +99,7 @@ impl App {
         match rx.try_recv() {
             Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(50)),
             Ok(r) => {
-                let m = self.s.generation_done(&output.clone(), r.entries);
+                let m = self.s.generation_done(&output.clone(), &r);
                 self.job = None;
                 self.dialogs.push(Dialog::Message(m));
             }
@@ -180,6 +180,12 @@ impl App {
 
     fn handle_picker(&mut self, ctx: &egui::Context) {
         self.picker.update(ctx);
+        if matches!(
+            self.picker.state(),
+            egui_file_dialog::DialogState::Cancelled
+        ) {
+            self.picking = None;
+        }
         if let Some(p) = self.picker.take_picked() {
             match self.picking.take() {
                 Some(Picking::Dir) => {
@@ -489,6 +495,10 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Let a running generation finish so the process doesn't exit mid-write.
+        if let Some((_, rx)) = self.job.take() {
+            let _ = rx.recv();
+        }
         self.s.auto_save();
     }
 }

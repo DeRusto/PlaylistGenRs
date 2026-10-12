@@ -296,25 +296,26 @@ pub fn resolve_user_path(s: &str) -> PathBuf {
     resolve(&p)
 }
 
-/// Python `Path.resolve()` (non-strict): canonicalize the longest existing prefix,
-/// then append the rest normalized.
+/// Python `Path.resolve()` (non-strict): walk the components, canonicalizing as long as the
+/// path exists so a `..` after a symlink applies to the link's target.
 pub fn resolve(p: &Path) -> PathBuf {
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
-    let abs = normpath(&abs);
-    let mut tail = Vec::new();
-    let mut head = abs.as_path();
-    loop {
-        if let Ok(c) = head.canonicalize() {
-            return tail.iter().rev().fold(c, |acc: PathBuf, t| acc.join(t));
-        }
-        match (head.parent(), head.file_name()) {
-            (Some(parent), Some(name)) => {
-                tail.push(name.to_os_string());
-                head = parent;
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
             }
-            _ => return abs,
+            Component::CurDir => {}
+            _ => {
+                out.push(c);
+                if let Ok(real) = out.canonicalize() {
+                    out = real;
+                }
+            }
         }
     }
+    out
 }
 
 #[cfg(test)]
@@ -332,6 +333,19 @@ mod tests {
         ] {
             assert_eq!(normpath(Path::new(i)), Path::new(o), "{i}");
         }
+    }
+
+    #[test]
+    fn resolve_follows_symlink_before_parent() {
+        let t = tempfile::TempDir::new().unwrap();
+        let base = t.path().canonicalize().unwrap();
+        std::fs::create_dir_all(base.join("mnt/tv/child")).unwrap();
+        std::os::unix::fs::symlink(base.join("mnt/tv/child"), base.join("link")).unwrap();
+        assert_eq!(resolve(&base.join("link/..")), base.join("mnt/tv"));
+        assert_eq!(
+            resolve(&base.join("link/new/../x.m3u")),
+            base.join("mnt/tv/child/x.m3u")
+        );
     }
 
     #[test]
