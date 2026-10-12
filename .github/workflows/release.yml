@@ -12,15 +12,22 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl
           components: clippy, rustfmt
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: pip install ziglang && cargo install --locked cargo-zigbuild
       - run: make test
-      - run: make build-gui build-static check-gui check-static
+      - run: make build-gui build-static
+      - name: Check portability
+        run: |
+          glibc=$(objdump -T target/x86_64-unknown-linux-gnu/release/playlistgenrs | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "newest glibc symbol: $glibc"
+          test "$(printf '%s\nGLIBC_2.17\n' "$glibc" | sort -V | tail -1)" = GLIBC_2.17
+          file target/x86_64-unknown-linux-musl/release/playlistgenrs | grep -q 'statically linked\|static-pie linked'
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
