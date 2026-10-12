@@ -101,7 +101,10 @@ file produces a warning and is left untouched until you explicitly save a layout
 
 ## Building
 
-You need Rust 1.88 or newer. Build on a connected machine and copy the binary to the offline one.
+Prebuilt Linux binaries (the portable GUI build and the static CLI build below) are attached
+to each [GitHub release](https://github.com/DeRusto/PlaylistGenRs/releases).
+
+To build yourself, you need Rust 1.88 or newer. Build on a connected machine and copy the binary to the offline one.
 
 ```bash
 cargo build --release                       # GUI build for this machine
