@@ -73,7 +73,7 @@ pub fn show(
                 ui.label("Enter Layout Name:");
                 let r = ui.text_edit_singleline(name);
                 r.request_focus();
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 match buttons(ui, "Save", Some("Cancel")) {
                     Outcome::Open if enter => Outcome::Confirm,
                     o => o,
