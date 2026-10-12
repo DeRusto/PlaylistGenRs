@@ -155,3 +155,21 @@ fn eof_inside_submenu_keeps_edits() {
     let s = LayoutStore::new(lf).get_layout(LAST_SESSION).unwrap();
     assert_eq!(s.selected, ["B"]);
 }
+
+#[test]
+fn eof_at_main_menu_leaves_layout_alone() {
+    let t = TempDir::new().unwrap();
+    let lf = t.path().join("l.json");
+    let saved = State {
+        dirs: vec![t.path().join("unplugged").display().to_string()],
+        selected: vec!["X".into()],
+        groups: vec![vec!["X".into(), "Y".into()]],
+        ..State::default()
+    };
+    LayoutStore::new(lf.clone())
+        .autosave_session(&saved)
+        .unwrap();
+    drive(&lf, "");
+    let s = LayoutStore::new(lf).get_layout(LAST_SESSION).unwrap();
+    assert_eq!((s.selected, s.groups), (saved.selected, saved.groups));
+}

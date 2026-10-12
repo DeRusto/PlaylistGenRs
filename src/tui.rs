@@ -16,11 +16,7 @@ pub fn run_menu(input: &mut impl BufRead, out: &mut impl Write) -> i32 {
 
 /// Run the menu with an explicit store. Quits with 0 on `q` or end of input.
 pub fn run_menu_with(store: LayoutStore, input: &mut impl BufRead, out: &mut impl Write) -> i32 {
-    let mut m = Menu::new(store, input, out);
-    // End of input (Ctrl-D) can land inside a submenu before its edits are saved.
-    if m.main_loop().is_none() {
-        m.save_state();
-    }
+    Menu::new(store, input, out).main_loop();
     0
 }
 
@@ -305,11 +301,15 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
                     }
                 }
             } else if choice == "w" && !self.show_info.is_empty() {
-                self.selection_screen()?;
+                // Save even if input ends (Ctrl-D) inside the submenu.
+                let step = self.selection_screen();
                 self.save_state();
+                step?;
             } else if raw_choice == "G" && !self.show_info.is_empty() {
-                self.groups_screen()?;
+                // Save even if input ends (Ctrl-D) inside the submenu.
+                let step = self.groups_screen();
                 self.save_state();
+                step?;
             } else if choice == "o" {
                 let raw = self.input("Output file path (Enter for auto): ")?;
                 self.output = (!raw.is_empty()).then(|| crate::build::resolve_user_path(&raw));
@@ -327,8 +327,10 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
                 };
                 self.save_state();
             } else if choice == "s" {
-                self.mode_submenu()?;
+                // Save even if input ends (Ctrl-D) inside the submenu.
+                let step = self.mode_submenu();
                 self.save_state();
+                step?;
             } else if choice == "g" && !self.dirs.is_empty() && !self.selected.is_empty() {
                 self.generate()?;
             } else if choice == "q" {
