@@ -1,0 +1,33 @@
+[package]
+name = "playlistgenrs"
+version = "0.1.0"
+edition = "2024"
+description = "PlaylistGenRs: interleave TV show episodes into one M3U playlist"
+license = "AGPL-3.0-only"
+authors = ["Brandon Douglas Winterton"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "7.0.0"
+eframe = { version = "0.36.2", optional = true }
+egui-file-dialog = { version = "0.15.0", optional = true }
+egui_extras = { version = "0.36.2", optional = true }
+pathdiff = "0.2.3"
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:egui_extras", "dep:egui-file-dialog"]
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
