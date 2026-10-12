@@ -1,0 +1,38 @@
+{
+  "layouts": {
+    "\u00c9vening Mix": {
+      "dirs": [
+        "/media/tv",
+        "/media/tv2"
+      ],
+      "selected": [
+        "ShowA",
+        "ShowB"
+      ],
+      "groups": [
+        [
+          "ShowA",
+          "ShowB"
+        ]
+      ],
+      "output_path": "/tmp/out.m3u",
+      "relative": true,
+      "repeat": false,
+      "show_order": "random",
+      "interleave_mode": "episodes",
+      "block_size": "5"
+    },
+    "Last Session State": {
+      "dirs": [],
+      "selected": [],
+      "groups": [],
+      "output_path": "",
+      "relative": false,
+      "repeat": false,
+      "show_order": "alpha",
+      "interleave_mode": "none",
+      "block_size": "10"
+    }
+  },
+  "active_layout_name": "\u00c9vening Mix"
+}
