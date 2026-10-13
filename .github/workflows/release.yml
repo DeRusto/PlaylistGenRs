@@ -2,8 +2,8 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  release: :
+    types: [published]
 
 permissions:
   contents: write
@@ -36,4 +36,4 @@ jobs:
           cp target/x86_64-unknown-linux-gnu/release/playlistgenrs "playlistgenrs-$GITHUB_REF_NAME-linux-x86_64"
           cp target/x86_64-unknown-linux-musl/release/playlistgenrs "playlistgenrs-$GITHUB_REF_NAME-linux-x86_64-cli-static"
           cp target/x86_64-pc-windows-gnu/release/playlistgenrs.exe "playlistgenrs-$GITHUB_REF_NAME-windows-x86_64.exe"
-          gh release create "$GITHUB_REF_NAME" --generate-notes playlistgenrs-*
+          gh release upload "$GITHUB_REF_NAME" playlistgenrs-*
