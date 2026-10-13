@@ -1,4 +1,4 @@
-# Push a tag like v0.1.0 to build both binaries and publish a GitHub release.
+# Publish a new release to trigger the wordkflow and build both binaries.
 name: Release
 
 on:
