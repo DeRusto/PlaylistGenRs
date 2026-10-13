@@ -101,8 +101,8 @@ file produces a warning and is left untouched until you explicitly save a layout
 
 ## Building
 
-Prebuilt Linux binaries (the portable GUI build and the static CLI build below) are attached
-to each [GitHub release](https://github.com/DeRusto/PlaylistGenRs/releases).
+Prebuilt binaries (the portable Linux GUI build, the static Linux CLI build below, and a
+Windows `.exe`) are attached to each [GitHub release](https://github.com/DeRusto/PlaylistGenRs/releases).
 
 To build yourself, you need Rust 1.88 or newer. Build on a connected machine and copy the binary to the offline one.
 
