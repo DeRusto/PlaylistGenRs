@@ -33,7 +33,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp target/x86_64-unknown-linux-gnu/release/playlistgenrs "playlistgenrs-$GITHUB_REF_NAME-linux-x86_64"
-          cp target/x86_64-unknown-linux-musl/release/playlistgenrs "playlistgenrs-$GITHUB_REF_NAME-linux-x86_64-cli-static"
-          cp target/x86_64-pc-windows-gnu/release/playlistgenrs.exe "playlistgenrs-$GITHUB_REF_NAME-windows-x86_64.exe"
+          release_filename_tag="${GITHUB_REF_NAME//\//-}"
+          cp target/x86_64-unknown-linux-gnu/release/playlistgenrs "playlistgenrs-$release_filename_tag-linux-x86_64"
+          cp target/x86_64-unknown-linux-musl/release/playlistgenrs "playlistgenrs-$release_filename_tag-linux-x86_64-cli-static"
+          cp target/x86_64-pc-windows-gnu/release/playlistgenrs.exe "playlistgenrs-$release_filename_tag-windows-x86_64.exe"
           gh release upload "$GITHUB_REF_NAME" playlistgenrs-*
