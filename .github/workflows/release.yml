@@ -16,12 +16,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
-          targets: x86_64-unknown-linux-musl
+          targets: x86_64-unknown-linux-musl, x86_64-pc-windows-gnu
           components: clippy, rustfmt
-      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools mingw-w64
       - run: pip install ziglang && cargo install --locked cargo-zigbuild
       - run: make test
       - run: make build-gui build-static
+      - run: cargo build --release --target x86_64-pc-windows-gnu
       - name: Check portability
         run: |
           glibc=$(objdump -T target/x86_64-unknown-linux-gnu/release/playlistgenrs | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
@@ -34,4 +35,5 @@ jobs:
         run: |
           cp target/x86_64-unknown-linux-gnu/release/playlistgenrs "playlistgenrs-$GITHUB_REF_NAME-linux-x86_64"
           cp target/x86_64-unknown-linux-musl/release/playlistgenrs "playlistgenrs-$GITHUB_REF_NAME-linux-x86_64-cli-static"
+          cp target/x86_64-pc-windows-gnu/release/playlistgenrs.exe "playlistgenrs-$GITHUB_REF_NAME-windows-x86_64.exe"
           gh release create "$GITHUB_REF_NAME" --generate-notes playlistgenrs-*
