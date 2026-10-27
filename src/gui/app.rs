@@ -425,7 +425,7 @@ impl App {
                 }
             }
         });
-        let tallest = slots.iter().map(|(_, t)| *t).max().unwrap_or(0).max(1);
+        let tallest = slots.iter().map(|(_, _, t)| *t).max().unwrap_or(0).max(1);
         let ctx = ui.ctx().clone();
         let payload = egui::DragAndDrop::payload::<String>(&ctx);
         let pointer = ui.input(|i| i.pointer.interact_pos());
@@ -451,7 +451,7 @@ impl App {
                 painter.hline(area.x_range(), top, egui::Stroke::new(1.0, v.warn_fg_color));
 
                 let mut target = None;
-                for (i, (slot, turns)) in slots.iter().enumerate() {
+                for (i, (slot, sizes, turns)) in slots.iter().enumerate() {
                     let x = area.left() + SLOT_GAP + i as f32 * (SLOT_W + SLOT_GAP);
                     let fill = if slot.group.is_some() {
                         v.selection.bg_fill
@@ -459,10 +459,9 @@ impl App {
                         v.widgets.inactive.weak_bg_fill
                     };
                     // Members are sized in episodes (or seasons), sharing the slot's turns.
-                    let sizes: Vec<usize> = slot.members.iter().map(|l| self.s.size(l)).collect();
                     let total = sizes.iter().sum::<usize>().max(1) as f32;
                     let mut y = bottom;
-                    for (label, h) in slot.members.iter().zip(sizes) {
+                    for (label, &h) in slot.members.iter().zip(sizes) {
                         let seg_h = h as f32 / total * *turns as f32 * scale;
                         let (lo, hi) = (egui::pos2(x, y - seg_h), egui::pos2(x + SLOT_W, y));
                         let seg = egui::Rect::from_min_max(lo, hi);

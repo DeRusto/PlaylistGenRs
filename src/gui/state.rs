@@ -5,7 +5,7 @@ use crate::build::{BuildOptions, BuildReport, Mode, ShowOrder, resolve, resolve_
 use crate::layout::{self, LayoutStore, State};
 use crate::rotation::{self, Slot};
 use crate::scan::{ShowInfo, refresh_shows};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// A message box: (kind, title, text).
@@ -345,28 +345,29 @@ impl GuiState {
         rotation::group_of(&self.groups, label)
     }
 
-    /// What `label` adds to its slot: seasons in seasons mode, else episodes.
-    pub fn size(&self, label: &str) -> usize {
-        self.show_info
-            .iter()
-            .find(|s| s.label == label)
-            .map_or(0, |s| rotation::size(s, self.mode))
-    }
-
-    /// Slots of used shows in the order the build places them, each with its turns.
-    pub fn balance_slots(&self) -> Vec<(Slot, usize)> {
-        let used: Vec<&str> = self
+    /// Slots of used shows in the order the build places them, each with its members'
+    /// sizes (seasons in seasons mode, else episodes) and its turns.
+    pub fn balance_slots(&self) -> Vec<(Slot, Vec<usize>, usize)> {
+        let sizes: HashMap<&str, usize> = self
             .show_info
             .iter()
             .filter(|s| self.selected.contains(&s.label))
+            .map(|s| (s.label.as_str(), rotation::size(s, self.mode)))
+            .collect();
+        let used: Vec<&str> = self
+            .show_info
+            .iter()
             .map(|s| s.label.as_str())
+            .filter(|l| sizes.contains_key(l))
             .collect();
         let block_size = layout::parse_block_size(&self.block_size);
         rotation::slots(&used, &self.groups)
             .into_iter()
             .map(|slot| {
-                let size = slot.members.iter().map(|l| self.size(l)).sum();
-                (slot, rotation::turns(size, self.mode, block_size))
+                let member_sizes: Vec<usize> =
+                    slot.members.iter().map(|l| sizes[l.as_str()]).collect();
+                let turns = rotation::turns(member_sizes.iter().sum(), self.mode, block_size);
+                (slot, member_sizes, turns)
             })
             .collect()
     }
@@ -412,15 +413,11 @@ impl GuiState {
     /// Existing groups are left alone; new ones are appended.
     pub fn auto_sort(&mut self) {
         let slots = self.balance_slots();
-        let target = slots.iter().map(|(_, t)| *t).max().unwrap_or(0);
+        let target = slots.iter().map(|(_, _, t)| *t).max().unwrap_or(0);
         let shows: Vec<(String, usize)> = slots
             .into_iter()
-            .filter(|(s, _)| s.group.is_none())
-            .filter_map(|(s, _)| s.members.into_iter().next())
-            .map(|l| {
-                let h = self.size(&l);
-                (l, h)
-            })
+            .filter(|(s, _, _)| s.group.is_none())
+            .filter_map(|(s, h, _)| s.members.into_iter().zip(h).next())
             .collect();
         let block_size = layout::parse_block_size(&self.block_size);
         let new = rotation::auto_sort(&shows, target, self.mode, block_size);
@@ -770,11 +767,12 @@ mod tests {
     fn slots(s: &GuiState) -> Vec<String> {
         s.balance_slots()
             .iter()
-            .map(|(b, _)| {
+            .map(|(b, h, _)| {
                 let m: Vec<String> = b
                     .members
                     .iter()
-                    .map(|l| format!("{l} {}", s.size(l)))
+                    .zip(h)
+                    .map(|(l, h)| format!("{l} {h}"))
                     .collect();
                 m.join(" + ")
             })
@@ -794,7 +792,7 @@ mod tests {
         assert_eq!(slots(&s), ["Alpha 3", "Gamma 4 + Beta 1"]);
         let b = s.balance_slots();
         assert_eq!((b[0].0.group, b[1].0.group), (None, Some(0)));
-        assert_eq!(b[1].1, 5);
+        assert_eq!(b[1].2, 5);
 
         s.mode = Mode::Seasons;
         assert_eq!(slots(&s), ["Alpha 2", "Gamma 1 + Beta 1"]);
@@ -802,7 +800,7 @@ mod tests {
         // Episodes mode: a slot's turns are its whole episode count in blocks.
         s.mode = Mode::Episodes;
         s.block_size = "2".into();
-        let turns: Vec<usize> = s.balance_slots().iter().map(|(_, t)| *t).collect();
+        let turns: Vec<usize> = s.balance_slots().iter().map(|(_, _, t)| *t).collect();
         assert_eq!(turns, [2, 3]);
 
         // Unused members drop out of their group's slot; all-unused groups vanish.
