@@ -4,7 +4,7 @@
 use crate::build::{BuildOptions, BuildReport, Mode, ShowOrder, resolve, resolve_user_path};
 use crate::layout::{self, LayoutStore, State};
 use crate::scan::{ShowInfo, refresh_shows};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// A message box: (kind, title, text).
@@ -32,6 +32,22 @@ pub fn msg(kind: Kind, title: &str, text: impl Into<String>) -> Msg {
 
 fn need_selection(text: &str) -> Msg {
     msg(Kind::Warning, "Selection Required", text)
+}
+
+/// One slot in the Balance view: a used show, or a group's used members.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BalanceSlot {
+    /// Index into `GuiState::groups`, or `None` for an ungrouped show.
+    pub group: Option<usize>,
+    /// (label, height) per member, in group order. Height is seasons in seasons mode,
+    /// else episodes.
+    pub members: Vec<(String, usize)>,
+}
+
+impl BalanceSlot {
+    pub fn total(&self) -> usize {
+        self.members.iter().map(|(_, h)| h).sum()
+    }
 }
 
 /// Everything a background generation run needs.
@@ -342,6 +358,88 @@ impl GuiState {
         }
     }
 
+    // --- Balance view ---
+
+    /// The group a show plays in, by the build's rule: the first group listing it.
+    fn group_of(&self, label: &str) -> Option<usize> {
+        self.groups
+            .iter()
+            .position(|g| g.iter().any(|l| l == label))
+    }
+
+    /// Slots of used shows in the order the build places them, with heights for `mode`.
+    pub fn balance_slots(&self) -> Vec<BalanceSlot> {
+        let seasons = self.mode == Mode::Seasons;
+        let heights: HashMap<&str, usize> = self
+            .show_info
+            .iter()
+            .filter(|s| self.selected.contains(&s.label))
+            .map(|s| {
+                let h = if seasons { s.n_seasons } else { s.n_episodes };
+                (s.label.as_str(), h)
+            })
+            .collect();
+        let mut placed = HashSet::new();
+        let mut out = vec![];
+        for s in &self.show_info {
+            let Some(&h) = heights.get(s.label.as_str()) else {
+                continue;
+            };
+            match self.group_of(&s.label) {
+                Some(g) if !placed.insert(g) => {}
+                Some(g) => out.push(BalanceSlot {
+                    group: Some(g),
+                    members: self.groups[g]
+                        .iter()
+                        .filter_map(|l| heights.get(l.as_str()).map(|&h| (l.clone(), h)))
+                        .collect(),
+                }),
+                None => out.push(BalanceSlot {
+                    group: None,
+                    members: vec![(s.label.clone(), h)],
+                }),
+            }
+        }
+        out
+    }
+
+    /// Balance-view drop of the used show `label` onto the slot holding `onto`, or onto
+    /// empty space (`None`). Dropping onto its own slot, or dropping an ungrouped show on
+    /// empty space, does nothing.
+    pub fn drop_show(&mut self, label: &str, onto: Option<&str>) {
+        let from = self.group_of(label);
+        match onto {
+            None => {
+                if from.is_none() {
+                    return;
+                }
+                layout::remove_from_groups(&mut self.groups, &[label.to_string()]);
+                self.status = format!("Removed '{label}' from its group.");
+            }
+            Some(target) if target == label => return,
+            Some(target) => match self.group_of(target) {
+                Some(g) if from == Some(g) => return,
+                Some(g) => {
+                    layout::gui_add_to_group(&mut self.groups, g, &[label.to_string()]);
+                    let g = self.group_of(label).expect("just added");
+                    self.status = format!("Added '{label}' to Group {}.", g + 1);
+                }
+                None => {
+                    // Show order, like "Create Group from Selected".
+                    let pair: Vec<String> = self
+                        .show_info
+                        .iter()
+                        .filter(|s| s.label == label || s.label == target)
+                        .map(|s| s.label.clone())
+                        .collect();
+                    layout::create_group(&mut self.groups, &pair);
+                    self.status = format!("Created group with '{target}' and '{label}'.");
+                }
+            },
+        }
+        self.auto_save();
+    }
+
     // --- Generation ---
 
     pub fn prepare_generation(&mut self) -> Result<Job, Msg> {
@@ -642,6 +740,104 @@ mod tests {
         s.remove_selected_from_group().unwrap();
         s.dissolve_group(0);
         assert!(s.groups.is_empty());
+    }
+
+    /// Alpha: 3 episodes in 2 seasons; Beta: 1 in 1; Gamma: 4 in 1; Delta: 2 in 2.
+    fn balance_setup() -> (TempDir, GuiState) {
+        let t = TempDir::new().unwrap();
+        for f in [
+            "Alpha/S1/e1.mkv",
+            "Alpha/S1/e2.mkv",
+            "Alpha/S2/e1.mkv",
+            "Beta/e1.mkv",
+            "Gamma/S1/e1.mkv",
+            "Gamma/S1/e2.mkv",
+            "Gamma/S1/e3.mkv",
+            "Gamma/S1/e4.mkv",
+            "Delta/S1/e1.mkv",
+            "Delta/S2/e1.mkv",
+        ] {
+            let p = t.path().join("tv").join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "").unwrap();
+        }
+        let mut s = GuiState::new(LayoutStore::new(t.path().join("l.json")));
+        s.add_directory(t.path().join("tv")).unwrap();
+        (t, s)
+    }
+
+    /// Slots as "label height" members joined by " + ", for compact asserts.
+    fn slots(s: &GuiState) -> Vec<String> {
+        s.balance_slots()
+            .iter()
+            .map(|b| {
+                let m: Vec<String> = b.members.iter().map(|(l, h)| format!("{l} {h}")).collect();
+                m.join(" + ")
+            })
+            .collect()
+    }
+
+    fn own(v: &[&str]) -> Vec<String> {
+        v.iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn balance_slots_follow_build_order_and_mode() {
+        let (_t, mut s) = balance_setup();
+        s.groups = vec![own(&["Gamma", "Beta"])];
+        s.selected.remove("Delta");
+        // The group sits where its first member in show order (Beta) would be.
+        assert_eq!(slots(&s), ["Alpha 3", "Gamma 4 + Beta 1"]);
+        let b = s.balance_slots();
+        assert_eq!((b[0].group, b[1].group), (None, Some(0)));
+        assert_eq!(b[1].total(), 5);
+
+        s.mode = Mode::Seasons;
+        assert_eq!(slots(&s), ["Alpha 2", "Gamma 1 + Beta 1"]);
+
+        // Unused members drop out of their group's slot; all-unused groups vanish.
+        s.mode = Mode::Episodes;
+        s.selected.remove("Beta");
+        assert_eq!(slots(&s), ["Alpha 3", "Gamma 4"]);
+        s.selected.remove("Gamma");
+        assert_eq!(slots(&s), ["Alpha 3"]);
+    }
+
+    #[test]
+    fn dropping_shows_edits_groups_and_saves() {
+        let (_t, mut s) = balance_setup();
+        let saved = |s: &GuiState| s.store.get_layout(layout::LAST_SESSION).unwrap().groups;
+
+        // Single onto single: a new group, in show order.
+        s.drop_show("Gamma", Some("Alpha"));
+        assert_eq!(s.groups, [["Alpha", "Gamma"]]);
+        assert_eq!(saved(&s), s.groups);
+        // Onto any member of a group: joins it.
+        s.drop_show("Beta", Some("Gamma"));
+        assert_eq!(s.groups, [["Alpha", "Gamma", "Beta"]]);
+
+        // No-ops: onto its own slot, and an ungrouped show onto empty space.
+        s.drop_show("Beta", Some("Alpha"));
+        s.drop_show("Beta", Some("Beta"));
+        s.drop_show("Delta", None);
+        assert_eq!(s.groups, [["Alpha", "Gamma", "Beta"]]);
+
+        // Out onto empty space: leaves the group; a lone member stays a 1-show group.
+        s.drop_show("Gamma", None);
+        s.drop_show("Alpha", None);
+        assert_eq!(s.groups, [["Beta"]]);
+        assert_eq!(s.balance_slots()[1].group, Some(0));
+        assert_eq!(saved(&s), s.groups);
+
+        // Moving between groups keeps the target group's position.
+        s.drop_show("Delta", Some("Beta"));
+        s.drop_show("Alpha", Some("Gamma"));
+        s.drop_show("Delta", Some("Alpha"));
+        assert_eq!(
+            s.groups,
+            [own(&["Beta"]), own(&["Alpha", "Gamma", "Delta"])]
+        );
+        assert_eq!(s.status, "Added 'Delta' to Group 2.");
     }
 
     #[test]
