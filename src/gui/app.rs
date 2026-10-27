@@ -413,101 +413,110 @@ impl App {
             ui.label("Check ('Use?') some shows to see them here.");
             return;
         }
-        let tallest = slots.iter().map(BalanceSlot::total).max().unwrap_or(0).max(1);
+        let tallest = slots
+            .iter()
+            .map(BalanceSlot::total)
+            .max()
+            .unwrap_or(0)
+            .max(1);
         let ctx = ui.ctx().clone();
         let payload = egui::DragAndDrop::payload::<String>(&ctx);
         let pointer = ui.input(|i| i.pointer.interact_pos());
         let released = ui.input(|i| i.pointer.any_released());
         let mut dropped: Option<(String, Option<String>)> = None;
 
-        egui::ScrollArea::horizontal().id_salt("balance").show(ui, |ui| {
-            let width = slots.len() as f32 * (SLOT_W + SLOT_GAP) + SLOT_GAP;
-            let height = ui.available_height().max(150.0);
-            let size = egui::vec2(width, height);
-            let (area, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-            let painter = ui.painter_at(area);
-            let v = ui.visuals().clone();
-            let font = egui::FontId::proportional(12.0);
-            // Room for totals above the slots and names below them.
-            let (top, bottom) = (area.top() + 20.0, area.bottom() - 20.0);
-            let visible = ui.clip_rect();
-            let scale = (bottom - top) / tallest as f32;
-            painter.hline(area.x_range(), top, egui::Stroke::new(1.0, v.warn_fg_color));
+        egui::ScrollArea::horizontal()
+            .id_salt("balance")
+            .show(ui, |ui| {
+                let width = slots.len() as f32 * (SLOT_W + SLOT_GAP) + SLOT_GAP;
+                // At least the viewport, so blank space right of a few slots takes drops.
+                let width = width.max(ui.available_width());
+                let height = ui.available_height().max(150.0);
+                let size = egui::vec2(width, height);
+                let (area, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                let painter = ui.painter_at(area);
+                let v = ui.visuals().clone();
+                let font = egui::FontId::proportional(12.0);
+                // Room for totals above the slots and names below them.
+                let (top, bottom) = (area.top() + 20.0, area.bottom() - 20.0);
+                let visible = ui.clip_rect();
+                let scale = (bottom - top) / tallest as f32;
+                painter.hline(area.x_range(), top, egui::Stroke::new(1.0, v.warn_fg_color));
 
-            let mut target = None;
-            for (i, slot) in slots.iter().enumerate() {
-                let x = area.left() + SLOT_GAP + i as f32 * (SLOT_W + SLOT_GAP);
-                let fill = if slot.group.is_some() {
-                    v.selection.bg_fill
-                } else {
-                    v.widgets.inactive.weak_bg_fill
-                };
-                let mut y = bottom;
-                for (label, h) in &slot.members {
-                    // Keep tiny segments grabbable; the printed total stays exact.
-                    let seg_h = (*h as f32 * scale).max(4.0);
-                    let (lo, hi) = (egui::pos2(x, y - seg_h), egui::pos2(x + SLOT_W, y));
-                    let seg = egui::Rect::from_min_max(lo, hi);
-                    y -= seg_h;
-                    let r = ui
-                        .interact(seg, ui.id().with(("bal", label)), egui::Sense::drag())
-                        .on_hover_text(format!("{label}: {h}"));
-                    r.dnd_set_drag_payload(label.clone());
-                    let active = v.widgets.active.bg_fill;
-                    painter.rect_filled(seg, 2.0, if r.dragged() { active } else { fill });
-                    let edge = egui::StrokeKind::Inside;
-                    painter.rect_stroke(seg, 2.0, v.window_stroke, edge);
-                    if seg_h >= 14.0 {
-                        let clipped = painter.with_clip_rect(seg.shrink(2.0));
-                        clipped.text(
-                            seg.center(),
-                            egui::Align2::CENTER_CENTER,
-                            label,
-                            font.clone(),
-                            v.strong_text_color(),
-                        );
+                let mut target = None;
+                for (i, slot) in slots.iter().enumerate() {
+                    let x = area.left() + SLOT_GAP + i as f32 * (SLOT_W + SLOT_GAP);
+                    let fill = if slot.group.is_some() {
+                        v.selection.bg_fill
+                    } else {
+                        v.widgets.inactive.weak_bg_fill
+                    };
+                    let mut y = bottom;
+                    for (label, h) in &slot.members {
+                        // Keep tiny segments grabbable; the printed total stays exact.
+                        let seg_h = (*h as f32 * scale).max(4.0);
+                        let (lo, hi) = (egui::pos2(x, y - seg_h), egui::pos2(x + SLOT_W, y));
+                        let seg = egui::Rect::from_min_max(lo, hi);
+                        y -= seg_h;
+                        let r = ui
+                            .interact(seg, ui.id().with(("bal", label)), egui::Sense::drag())
+                            .on_hover_text(format!("{label}: {h}"));
+                        r.dnd_set_drag_payload(label.clone());
+                        let active = v.widgets.active.bg_fill;
+                        painter.rect_filled(seg, 2.0, if r.dragged() { active } else { fill });
+                        let edge = egui::StrokeKind::Inside;
+                        painter.rect_stroke(seg, 2.0, v.window_stroke, edge);
+                        if seg_h >= 14.0 {
+                            let clipped = painter.with_clip_rect(seg.shrink(2.0));
+                            clipped.text(
+                                seg.center(),
+                                egui::Align2::CENTER_CENTER,
+                                label,
+                                font.clone(),
+                                v.strong_text_color(),
+                            );
+                        }
+                        if r.dragged() {
+                            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+                        }
                     }
-                    if r.dragged() {
-                        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let (lo, hi) = (egui::pos2(x, y), egui::pos2(x + SLOT_W, bottom));
+                    let stack = egui::Rect::from_min_max(lo, hi);
+                    let name = match slot.group {
+                        Some(g) => format!("Group {}", g + 1),
+                        None => slot.members[0].0.clone(),
+                    };
+                    let name_row = egui::Rect::from_min_max(
+                        egui::pos2(x, bottom + 2.0),
+                        egui::pos2(x + SLOT_W, area.bottom()),
+                    );
+                    painter.with_clip_rect(name_row).text(
+                        name_row.center_top(),
+                        egui::Align2::CENTER_TOP,
+                        name,
+                        font.clone(),
+                        v.text_color(),
+                    );
+                    painter.text(
+                        egui::pos2(stack.center().x, y - 2.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        slot.total().to_string(),
+                        font.clone(),
+                        v.text_color(),
+                    );
+                    if payload.is_some() && pointer.is_some_and(|p| stack.contains(p)) {
+                        let edge = egui::StrokeKind::Outside;
+                        painter.rect_stroke(stack, 2.0, v.selection.stroke, edge);
+                        target = Some(slot.members[0].0.clone());
                     }
                 }
-                let (lo, hi) = (egui::pos2(x, y), egui::pos2(x + SLOT_W, bottom));
-                let stack = egui::Rect::from_min_max(lo, hi);
-                let name = match slot.group {
-                    Some(g) => format!("Group {}", g + 1),
-                    None => slot.members[0].0.clone(),
-                };
-                let name_row = egui::Rect::from_min_max(
-                    egui::pos2(x, bottom + 2.0),
-                    egui::pos2(x + SLOT_W, area.bottom()),
-                );
-                painter.with_clip_rect(name_row).text(
-                    name_row.center_top(),
-                    egui::Align2::CENTER_TOP,
-                    name,
-                    font.clone(),
-                    v.text_color(),
-                );
-                painter.text(
-                    egui::pos2(stack.center().x, y - 2.0),
-                    egui::Align2::CENTER_BOTTOM,
-                    slot.total().to_string(),
-                    font.clone(),
-                    v.text_color(),
-                );
-                if payload.is_some() && pointer.is_some_and(|p| stack.contains(p)) {
-                    let edge = egui::StrokeKind::Outside;
-                    painter.rect_stroke(stack, 2.0, v.selection.stroke, edge);
-                    target = Some(slot.members[0].0.clone());
+                if released
+                    && let Some(p) = &payload
+                    && pointer.is_some_and(|p| area.contains(p) && visible.contains(p))
+                {
+                    dropped = Some((p.to_string(), target));
                 }
-            }
-            if released
-                && let Some(p) = &payload
-                && pointer.is_some_and(|p| area.contains(p) && visible.contains(p))
-            {
-                dropped = Some((p.to_string(), target));
-            }
-        });
+            });
 
         if let Some((label, onto)) = dropped {
             egui::DragAndDrop::clear_payload(&ctx);

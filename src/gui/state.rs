@@ -362,7 +362,9 @@ impl GuiState {
 
     /// The group a show plays in, by the build's rule: the first group listing it.
     fn group_of(&self, label: &str) -> Option<usize> {
-        self.groups.iter().position(|g| g.iter().any(|l| l == label))
+        self.groups
+            .iter()
+            .position(|g| g.iter().any(|l| l == label))
     }
 
     /// Slots of used shows in the order the build places them, with heights for `mode`.
@@ -831,7 +833,10 @@ mod tests {
         s.drop_show("Delta", Some("Beta"));
         s.drop_show("Alpha", Some("Gamma"));
         s.drop_show("Delta", Some("Alpha"));
-        assert_eq!(s.groups, [own(&["Beta"]), own(&["Alpha", "Gamma", "Delta"])]);
+        assert_eq!(
+            s.groups,
+            [own(&["Beta"]), own(&["Alpha", "Gamma", "Delta"])]
+        );
         assert_eq!(s.status, "Added 'Delta' to Group 2.");
     }
 
