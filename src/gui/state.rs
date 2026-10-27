@@ -1,11 +1,11 @@
 //! GUI state and actions, kept free of egui so they can be unit tested.
 //! Mirrors the Python `InterleaverGUI` methods; rendering lives in `app.rs`.
 
-use crate::build::{BuildOptions, BuildReport, Mode, ShowOrder, resolve, resolve_user_path};
+use crate::build::{BuildOptions, BuildReport, Mode};
 use crate::groups;
-use crate::layout::{self, LayoutStore, State};
+use crate::layout::{self, LayoutStore};
 use crate::rotation::{self, Slot};
-use crate::scan::{ShowInfo, refresh_shows};
+use crate::session::{DirError, Session};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -44,16 +44,7 @@ pub struct Job {
 }
 
 pub struct GuiState {
-    pub store: LayoutStore,
-    pub dirs: Vec<PathBuf>,
-    pub show_info: Vec<ShowInfo>,
-    pub selected: HashSet<String>,
-    pub groups: Vec<Vec<String>>,
-    pub output_path: String,
-    pub relative: bool,
-    pub repeat: bool,
-    pub show_order: ShowOrder,
-    pub mode: Mode,
+    pub session: Session,
     /// Raw text of the Block Size field; validated only on generate.
     pub block_size: String,
     /// Highlighted table rows, by label.
@@ -69,33 +60,42 @@ impl GuiState {
     /// Restore the active layout, falling back to "Last Session State" only.
     pub fn new(store: LayoutStore) -> Self {
         let mut s = GuiState {
-            store,
-            dirs: vec![],
-            show_info: vec![],
-            selected: HashSet::new(),
-            groups: vec![],
-            output_path: String::new(),
-            relative: false,
-            repeat: false,
-            show_order: ShowOrder::Alpha,
-            mode: Mode::None,
-            block_size: "10".into(),
+            session: Session::open(store),
+            block_size: String::new(),
             rows: HashSet::new(),
             anchor: None,
             dir_sel: None,
             status: "Ready".into(),
         };
-        for w in std::mem::take(&mut s.store.warnings) {
+        s.reset_ui();
+        s
+    }
+
+    /// Clear UI state after the session's layout was replaced.
+    fn reset_ui(&mut self) {
+        self.block_size = self.session.block_size.to_string();
+        self.rows.clear();
+        self.anchor = None;
+        self.dir_sel = None;
+    }
+
+    /// After a rescan: forget highlighted rows whose shows are gone.
+    fn after_rescan(&mut self) {
+        let all = layout::labels(&self.session.show_info);
+        self.rows.retain(|l| all.contains(l));
+        self.anchor = None;
+    }
+
+    /// Print and clear the session's warnings.
+    pub fn print_warnings(&mut self) {
+        for w in self.session.warnings.drain(..) {
             eprintln!("{w}");
         }
-        if let Some(state) = s.store.startup_state(false) {
-            s.apply_state(&state);
-        }
-        s
     }
 
     pub fn title(&self) -> String {
         let name = self
+            .session
             .store
             .active_layout_name
             .as_deref()
@@ -103,94 +103,53 @@ impl GuiState {
         format!("TV Playlist Interleaver — [{name}]")
     }
 
-    pub fn current_state(&self) -> State {
-        State {
-            dirs: self
-                .dirs
-                .iter()
-                .map(|d| d.to_string_lossy().into_owned())
-                .collect(),
-            selected: layout::selected_list(&self.selected, &self.show_info),
-            groups: self.groups.clone(),
-            output_path: self.output_path.clone(),
-            relative: self.relative,
-            repeat: self.repeat,
-            show_order: self.show_order,
-            interleave_mode: self.mode,
-            block_size: layout::parse_block_size(&self.block_size),
-        }
-    }
-
-    pub fn apply_state(&mut self, state: &State) {
-        self.dirs = state.dirs.iter().map(PathBuf::from).collect();
-        self.dir_sel = None;
-        self.rescan_shows();
-        let all = layout::labels(&self.show_info);
-        self.selected = state
-            .selected
-            .iter()
-            .filter(|l| all.contains(*l))
-            .cloned()
-            .collect();
-        self.groups = groups::retain_known(&state.groups, &all);
-        self.output_path = state.output_path.clone();
-        self.relative = state.relative;
-        self.repeat = state.repeat;
-        self.show_order = state.show_order;
-        self.mode = state.interleave_mode;
-        self.block_size = state.block_size.to_string();
-    }
-
     /// Save to the active layout, or to the session slot when none is active.
     pub fn auto_save(&mut self) {
-        let state = self.current_state();
-        if let Err(e) = self.store.autosave(&state) {
-            eprintln!("{e}");
-        }
-    }
-
-    pub fn rescan_shows(&mut self) {
-        let old = layout::labels(&self.show_info);
-        let mut warnings = vec![];
-        self.show_info = refresh_shows(&self.dirs, &mut warnings);
-        for w in warnings {
-            eprintln!("{w}");
-        }
-        layout::rescan(&old, &self.show_info, &mut self.selected, &mut self.groups);
-        let all = layout::labels(&self.show_info);
-        self.rows.retain(|l| all.contains(l));
-        self.anchor = None;
+        self.session.block_size = layout::parse_block_size(&self.block_size);
+        self.session.autosave();
     }
 
     // --- Directories ---
 
     pub fn add_directory(&mut self, chosen: PathBuf) -> Result<(), Msg> {
-        let p = resolve(&chosen);
-        if self.dirs.contains(&p) {
-            return Err(msg(
+        match self.session.add_dir(&chosen) {
+            Ok(p) => {
+                self.after_rescan();
+                self.status = format!("Added directory: {}", p.display());
+                self.auto_save();
+                Ok(())
+            }
+            Err(DirError::AlreadyAdded(p)) => Err(msg(
                 Kind::Info,
                 "Directory exists",
-                format!("Directory is already added:\n{}", p.display()),
-            ));
+                format!(
+                    "Directory is already added:
+{}",
+                    p.display()
+                ),
+            )),
+            Err(DirError::NotADirectory(p)) => Err(msg(
+                Kind::Error,
+                "Error",
+                format!(
+                    "Not a directory:
+{}",
+                    p.display()
+                ),
+            )),
         }
-        self.dirs.push(p.clone());
-        self.rescan_shows();
-        self.status = format!("Added directory: {}", p.display());
-        self.auto_save();
-        Ok(())
     }
 
     pub fn remove_directory(&mut self) -> Result<(), Msg> {
-        let Some(i) = self.dir_sel.filter(|&i| i < self.dirs.len()) else {
+        let Some(removed) = self.dir_sel.and_then(|i| self.session.remove_dir(i)) else {
             return Err(msg(
                 Kind::Warning,
                 "Selection Required",
                 "Please select a directory to remove.",
             ));
         };
-        let removed = self.dirs.remove(i);
         self.dir_sel = None;
-        self.rescan_shows();
+        self.after_rescan();
         self.status = format!("Removed directory: {}", removed.display());
         self.auto_save();
         Ok(())
@@ -200,7 +159,8 @@ impl GuiState {
 
     /// Highlighted labels in table order.
     pub fn row_labels(&self) -> Vec<String> {
-        self.show_info
+        self.session
+            .show_info
             .iter()
             .filter(|s| self.rows.contains(&s.label))
             .map(|s| s.label.clone())
@@ -209,7 +169,7 @@ impl GuiState {
 
     /// Row click: plain selects one, ctrl toggles, shift selects a range from the anchor.
     pub fn click_row(&mut self, idx: usize, ctrl: bool, shift: bool) {
-        let Some(label) = self.show_info.get(idx).map(|s| s.label.clone()) else {
+        let Some(label) = self.session.show_info.get(idx).map(|s| s.label.clone()) else {
             return;
         };
         match (shift, self.anchor) {
@@ -218,8 +178,11 @@ impl GuiState {
                     self.rows.clear();
                 }
                 let (lo, hi) = (a.min(idx), a.max(idx));
-                self.rows
-                    .extend(self.show_info[lo..=hi].iter().map(|s| s.label.clone()));
+                self.rows.extend(
+                    self.session.show_info[lo..=hi]
+                        .iter()
+                        .map(|s| s.label.clone()),
+                );
                 return;
             }
             _ if ctrl => {
@@ -236,7 +199,7 @@ impl GuiState {
 
     /// Text in the Group column: only for used shows, naming the group they play in.
     pub fn group_text(&self, label: &str) -> String {
-        if !self.selected.contains(label) {
+        if !self.session.selected.contains(label) {
             return String::new();
         }
         match self.group_of(label) {
@@ -248,15 +211,15 @@ impl GuiState {
     /// Space / double-click: flip "Use?" on highlighted rows.
     pub fn toggle_show_selected(&mut self) {
         for l in self.row_labels() {
-            if !self.selected.remove(&l) {
-                self.selected.insert(l);
+            if !self.session.selected.remove(&l) {
+                self.session.selected.insert(l);
             }
         }
         self.auto_save();
     }
 
     fn check_in_use(&self, labels: &[String]) -> Result<(), Msg> {
-        match labels.iter().find(|l| !self.selected.contains(*l)) {
+        match labels.iter().find(|l| !self.session.selected.contains(*l)) {
             Some(l) => Err(msg(
                 Kind::Warning,
                 "Show not in Use",
@@ -276,7 +239,7 @@ impl GuiState {
                 "Please select 2 or more shows to create a group.",
             ));
         }
-        groups::create(&mut self.groups, &labels);
+        groups::create(&mut self.session.groups, &labels);
         self.status = format!("Created group with {} shows.", labels.len());
         self.auto_save();
         Ok(())
@@ -291,7 +254,7 @@ impl GuiState {
             ));
         }
         self.check_in_use(&labels)?;
-        if self.groups.is_empty() {
+        if self.session.groups.is_empty() {
             return Err(msg(
                 Kind::Info,
                 "No Groups",
@@ -303,7 +266,7 @@ impl GuiState {
 
     pub fn add_selected_to_group(&mut self, g_idx: usize) {
         let labels = self.row_labels();
-        groups::add(&mut self.groups, g_idx, &labels);
+        groups::add(&mut self.session.groups, g_idx, &labels);
         self.status = format!("Added {} shows to Group {}.", labels.len(), g_idx + 1);
         self.auto_save();
     }
@@ -315,14 +278,14 @@ impl GuiState {
                 "Please select one or more shows to remove from their groups.",
             ));
         }
-        groups::remove(&mut self.groups, &labels);
+        groups::remove(&mut self.session.groups, &labels);
         self.status = "Removed selected shows from their groups.".into();
         self.auto_save();
         Ok(())
     }
 
     pub fn can_dissolve(&self) -> Result<(), Msg> {
-        if self.groups.is_empty() {
+        if self.session.groups.is_empty() {
             return Err(msg(
                 Kind::Info,
                 "No Groups",
@@ -333,8 +296,8 @@ impl GuiState {
     }
 
     pub fn dissolve_group(&mut self, g_idx: usize) {
-        if g_idx < self.groups.len() {
-            groups::dissolve(&mut self.groups, g_idx);
+        if g_idx < self.session.groups.len() {
+            groups::dissolve(&mut self.session.groups, g_idx);
             self.status = format!("Dissolved Group {}.", g_idx + 1);
             self.auto_save();
         }
@@ -343,31 +306,34 @@ impl GuiState {
     // --- Balance view ---
 
     fn group_of(&self, label: &str) -> Option<usize> {
-        groups::group_of(&self.groups, label)
+        groups::group_of(&self.session.groups, label)
     }
 
     /// Slots of used shows in the order the build places them, each with its members'
     /// sizes (seasons in seasons mode, else episodes) and its turns.
     pub fn balance_slots(&self) -> Vec<(Slot, Vec<usize>, usize)> {
         let sizes: HashMap<&str, usize> = self
+            .session
             .show_info
             .iter()
-            .filter(|s| self.selected.contains(&s.label))
-            .map(|s| (s.label.as_str(), rotation::size(s, self.mode)))
+            .filter(|s| self.session.selected.contains(&s.label))
+            .map(|s| (s.label.as_str(), rotation::size(s, self.session.mode)))
             .collect();
         let used: Vec<&str> = self
+            .session
             .show_info
             .iter()
             .map(|s| s.label.as_str())
             .filter(|l| sizes.contains_key(l))
             .collect();
         let block_size = layout::parse_block_size(&self.block_size);
-        rotation::slots(&used, &self.groups)
+        rotation::slots(&used, &self.session.groups)
             .into_iter()
             .map(|slot| {
                 let member_sizes: Vec<usize> =
                     slot.members.iter().map(|l| sizes[l.as_str()]).collect();
-                let turns = rotation::turns(member_sizes.iter().sum(), self.mode, block_size);
+                let turns =
+                    rotation::turns(member_sizes.iter().sum(), self.session.mode, block_size);
                 (slot, member_sizes, turns)
             })
             .collect()
@@ -383,26 +349,27 @@ impl GuiState {
                 if from.is_none() {
                     return;
                 }
-                groups::remove(&mut self.groups, &[label.to_string()]);
+                groups::remove(&mut self.session.groups, &[label.to_string()]);
                 self.status = format!("Removed '{label}' from its group.");
             }
             Some(target) if target == label => return,
             Some(target) => match self.group_of(target) {
                 Some(g) if from == Some(g) => return,
                 Some(g) => {
-                    groups::add(&mut self.groups, g, &[label.to_string()]);
+                    groups::add(&mut self.session.groups, g, &[label.to_string()]);
                     let g = self.group_of(label).expect("just added");
                     self.status = format!("Added '{label}' to Group {}.", g + 1);
                 }
                 None => {
                     // Show order, like "Create Group from Selected".
                     let pair: Vec<String> = self
+                        .session
                         .show_info
                         .iter()
                         .filter(|s| s.label == label || s.label == target)
                         .map(|s| s.label.clone())
                         .collect();
-                    groups::create(&mut self.groups, &pair);
+                    groups::create(&mut self.session.groups, &pair);
                     self.status = format!("Created group with '{target}' and '{label}'.");
                 }
             },
@@ -421,20 +388,20 @@ impl GuiState {
             .filter_map(|(s, h, _)| s.members.into_iter().zip(h).next())
             .collect();
         let block_size = layout::parse_block_size(&self.block_size);
-        let new = rotation::auto_sort(&shows, target, self.mode, block_size);
+        let new = rotation::auto_sort(&shows, target, self.session.mode, block_size);
         self.status = match new.len() {
             0 => "Auto-sort found no shows that fit together.".into(),
             1 => "Auto-sort created 1 group.".into(),
             n => format!("Auto-sort created {n} groups."),
         };
-        self.groups.extend(new);
+        self.session.groups.extend(new);
         self.auto_save();
     }
 
     /// Dissolve every group, then auto-sort all used shows (target: the tallest show).
     /// The app confirms first.
     pub fn wipe_and_auto_sort(&mut self) {
-        self.groups.clear();
+        self.session.groups.clear();
         self.auto_sort();
     }
 
@@ -442,45 +409,26 @@ impl GuiState {
 
     pub fn prepare_generation(&mut self) -> Result<Job, Msg> {
         let err = |t: &str| msg(Kind::Error, "Error", t);
-        if self.dirs.is_empty() {
+        if self.session.dirs.is_empty() {
             return Err(err("Please add at least one media directory first."));
         }
-        if self.selected.is_empty() {
+        if self.session.selected.is_empty() {
             return Err(err("Please select/check ('Use?') at least one show."));
         }
-        let out = self.output_path.trim();
-        let output = if out.is_empty() {
-            self.dirs[0].join("interleaved.m3u")
-        } else {
-            resolve_user_path(out)
-        };
-        let mut block_size = 10;
-        if self.mode == Mode::Episodes {
+        if self.session.mode == Mode::Episodes {
             let raw = self.block_size.trim();
             match raw.parse::<usize>() {
-                Ok(n) if n > 0 && raw.bytes().all(|b| b.is_ascii_digit()) => block_size = n,
+                Ok(n) if n > 0 && raw.bytes().all(|b| b.is_ascii_digit()) => {
+                    self.session.block_size = n
+                }
                 _ => return Err(err("Block Size must be a positive integer.")),
             }
         }
-        let include = self
-            .show_info
-            .iter()
-            .filter(|s| self.selected.contains(&s.label))
-            .map(|s| s.label.clone())
-            .collect();
         self.status = "Generating playlist...".into();
         Ok(Job {
-            dirs: self.dirs.clone(),
-            output,
-            opts: BuildOptions {
-                relative: self.relative,
-                repeat: self.repeat,
-                mode: self.mode,
-                block_size,
-                include: Some(include),
-                groups: self.groups.clone(),
-                show_order: self.show_order,
-            },
+            dirs: self.session.dirs.clone(),
+            output: self.session.output().expect("checked dirs above"),
+            opts: self.session.build_options(),
         })
     }
 
@@ -511,39 +459,21 @@ impl GuiState {
     // --- Layouts ---
 
     pub fn new_layout(&mut self) {
-        self.dirs.clear();
-        self.show_info.clear();
-        self.selected.clear();
-        self.groups.clear();
-        self.rows.clear();
-        self.anchor = None;
-        self.dir_sel = None;
-        self.output_path.clear();
-        self.relative = false;
-        self.repeat = false;
-        self.show_order = ShowOrder::Alpha;
-        self.mode = Mode::None;
-        self.block_size = "10".into();
-        self.store.active_layout_name = None;
-        // Don't replace an unreadable layout file without an explicit save.
-        if !self.store.load_failed()
-            && let Err(e) = self.store.save_all()
-        {
-            eprintln!("{e}");
-        }
+        self.session.new_layout();
+        self.reset_ui();
         self.status = "Created new layout.".into();
     }
 
     /// Save under `name` (the Save As dialog has already confirmed any overwrite).
     pub fn save_as(&mut self, name: &str) -> Result<(), Msg> {
-        let state = self.current_state();
-        match self.store.save_layout(name, &state) {
+        self.session.block_size = layout::parse_block_size(&self.block_size);
+        match self.session.save_as(name) {
             Ok(()) => {
                 self.status = format!("Saved layout: {name}");
                 Ok(())
             }
             Err(e) => {
-                eprintln!("{e}");
+                self.session.warnings.push(e);
                 self.status = "Save failed.".into();
                 Err(msg(
                     Kind::Error,
@@ -555,29 +485,23 @@ impl GuiState {
     }
 
     pub fn layout_names(&self) -> Vec<String> {
-        self.store.layouts.keys().cloned().collect()
+        self.session.store.layouts.keys().cloned().collect()
     }
 
     pub fn load_layout(&mut self, name: &str) {
-        if let Some(state) = self.store.get_layout(name) {
-            self.store.active_layout_name = Some(name.to_string());
-            if let Err(e) = self.store.save_all() {
-                eprintln!("{e}");
-            }
-            self.apply_state(&state);
+        if self.session.load(name) {
+            self.reset_ui();
             self.status = format!("Loaded layout: {name}");
         }
     }
 
     pub fn delete_layout(&mut self, name: &str) {
-        if let Err(e) = self.store.delete_layout(name) {
-            eprintln!("{e}");
-        }
-        self.status = format!("Deleted layout: {name}");
-        match self.store.get_active_state() {
-            Some(state) => self.apply_state(&state),
-            None => self.new_layout(),
-        }
+        self.session.delete(name);
+        self.reset_ui();
+        self.status = match self.session.store.active_layout_name {
+            Some(_) => format!("Deleted layout: {name}"),
+            None => "Created new layout.".into(),
+        };
     }
 }
 
@@ -603,79 +527,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_and_extract_state() {
-        let (t, mut s) = setup();
-        let dir = t.path().join("tv").to_string_lossy().into_owned();
-        let state = State {
-            dirs: vec![dir.clone()],
-            selected: vec!["BreakingBad".into(), "Gone".into()],
-            groups: vec![vec!["BreakingBad".into(), "Gone".into()]],
-            output_path: "/tmp/test.m3u".into(),
-            relative: true,
-            repeat: true,
-            show_order: ShowOrder::Random,
-            interleave_mode: Mode::Episodes,
-            block_size: 7,
-        };
-        s.apply_state(&state);
-        let cur = s.current_state();
-        assert_eq!(cur.dirs, [dir]);
-        assert_eq!(cur.selected, ["BreakingBad"]);
-        assert_eq!(cur.groups, [["BreakingBad"]]);
-        assert_eq!(cur.block_size, 7);
-        assert_eq!(
-            (cur.output_path.as_str(), cur.relative, cur.repeat),
-            ("/tmp/test.m3u", true, true)
-        );
-
-        // Saved layouts are snapshots.
-        s.store.save_layout("Mutated", &s.current_state()).unwrap();
-        s.groups.push(vec!["X".into()]);
-        assert_eq!(
-            s.store.get_layout("Mutated").unwrap().groups,
-            [["BreakingBad"]]
-        );
-    }
-
-    #[test]
-    fn recovers_last_session_but_not_first_layout() {
-        let t = TempDir::new().unwrap();
-        let f = t.path().join("l.json");
-        let mut store = LayoutStore::new(f.clone());
-        store.layouts.insert(
-            "Other".into(),
-            serde_json::to_value(State {
-                repeat: true,
-                ..Default::default()
-            })
-            .unwrap(),
-        );
-        store.save_all().unwrap();
-        assert!(!GuiState::new(LayoutStore::new(f.clone())).repeat);
-
-        let mut store = LayoutStore::new(f.clone());
-        store
-            .autosave_session(&State {
-                output_path: "/tmp/r.m3u".into(),
-                block_size: 12,
-                ..Default::default()
-            })
-            .unwrap();
-        let s = GuiState::new(LayoutStore::new(f));
-        assert_eq!(s.store.active_layout_name, None);
-        assert_eq!(
-            (s.output_path.as_str(), s.block_size.as_str()),
-            ("/tmp/r.m3u", "12")
-        );
-        assert_eq!(s.title(), "TV Playlist Interleaver — [Unsaved Layout]");
-    }
-
-    #[test]
     fn directories_and_rows() {
         let (t, mut s) = setup();
         s.add_directory(t.path().join("tv")).unwrap();
-        assert_eq!(s.show_info.len(), 3);
-        assert_eq!(s.selected.len(), 3, "new shows auto-selected");
+        assert_eq!(s.session.show_info.len(), 3);
+        assert_eq!(s.session.selected.len(), 3, "new shows auto-selected");
         let e = s.add_directory(t.path().join("tv/../tv")).unwrap_err();
         assert_eq!(e.title, "Directory exists");
 
@@ -689,7 +545,7 @@ mod tests {
         assert_eq!(s.row_labels(), ["BreakingBad"]);
 
         s.toggle_show_selected();
-        assert!(!s.selected.contains("BreakingBad"));
+        assert!(!s.session.selected.contains("BreakingBad"));
         assert_eq!(s.group_text("BreakingBad"), "");
 
         assert_eq!(
@@ -698,7 +554,7 @@ mod tests {
         );
         s.dir_sel = Some(0);
         s.remove_directory().unwrap();
-        assert!(s.show_info.is_empty() && s.rows.is_empty());
+        assert!(s.session.show_info.is_empty() && s.rows.is_empty());
     }
 
     #[test]
@@ -721,23 +577,26 @@ mod tests {
         s.click_row(0, false, false);
         s.click_row(1, true, false);
         s.create_group_from_selected().unwrap();
-        assert_eq!(s.groups, [["BetterCallSaul", "BreakingBad"]]);
+        assert_eq!(s.session.groups, [["BetterCallSaul", "BreakingBad"]]);
         assert_eq!(s.group_text("BreakingBad"), "Group 1");
         assert_eq!(s.status, "Created group with 2 shows.");
 
         s.click_row(2, false, false);
         s.can_add_to_group().unwrap();
         s.add_selected_to_group(0);
-        assert_eq!(s.groups, [["BetterCallSaul", "BreakingBad", "Columbo"]]);
+        assert_eq!(
+            s.session.groups,
+            [["BetterCallSaul", "BreakingBad", "Columbo"]]
+        );
 
-        s.selected.remove("Columbo");
+        s.session.selected.remove("Columbo");
         assert_eq!(
             s.can_add_to_group().unwrap_err().text,
             "Show 'Columbo' must be checked ('Use?') before grouping."
         );
         s.remove_selected_from_group().unwrap();
         s.dissolve_group(0);
-        assert!(s.groups.is_empty());
+        assert!(s.session.groups.is_empty());
     }
 
     /// Alpha: 3 episodes in 2 seasons; Beta: 1 in 1; Gamma: 4 in 1; Delta: 2 in 2.
@@ -787,62 +646,68 @@ mod tests {
     #[test]
     fn balance_slots_follow_build_order_and_mode() {
         let (_t, mut s) = balance_setup();
-        s.groups = vec![own(&["Gamma", "Beta"])];
-        s.selected.remove("Delta");
+        s.session.groups = vec![own(&["Gamma", "Beta"])];
+        s.session.selected.remove("Delta");
         // The group sits where its first member in show order (Beta) would be.
         assert_eq!(slots(&s), ["Alpha 3", "Gamma 4 + Beta 1"]);
         let b = s.balance_slots();
         assert_eq!((b[0].0.group, b[1].0.group), (None, Some(0)));
         assert_eq!(b[1].2, 5);
 
-        s.mode = Mode::Seasons;
+        s.session.mode = Mode::Seasons;
         assert_eq!(slots(&s), ["Alpha 2", "Gamma 1 + Beta 1"]);
 
         // Episodes mode: a slot's turns are its whole episode count in blocks.
-        s.mode = Mode::Episodes;
+        s.session.mode = Mode::Episodes;
         s.block_size = "2".into();
         let turns: Vec<usize> = s.balance_slots().iter().map(|(_, _, t)| *t).collect();
         assert_eq!(turns, [2, 3]);
 
         // Unused members drop out of their group's slot; all-unused groups vanish.
-        s.selected.remove("Beta");
+        s.session.selected.remove("Beta");
         assert_eq!(slots(&s), ["Alpha 3", "Gamma 4"]);
-        s.selected.remove("Gamma");
+        s.session.selected.remove("Gamma");
         assert_eq!(slots(&s), ["Alpha 3"]);
     }
 
     #[test]
     fn dropping_shows_edits_groups_and_saves() {
         let (_t, mut s) = balance_setup();
-        let saved = |s: &GuiState| s.store.get_layout(layout::LAST_SESSION).unwrap().groups;
+        let saved = |s: &GuiState| {
+            s.session
+                .store
+                .get_layout(layout::LAST_SESSION)
+                .unwrap()
+                .groups
+        };
 
         // Single onto single: a new group, in show order.
         s.drop_show("Gamma", Some("Alpha"));
-        assert_eq!(s.groups, [["Alpha", "Gamma"]]);
-        assert_eq!(saved(&s), s.groups);
+        assert_eq!(s.session.groups, [["Alpha", "Gamma"]]);
+        assert_eq!(saved(&s), s.session.groups);
         // Onto any member of a group: joins it.
         s.drop_show("Beta", Some("Gamma"));
-        assert_eq!(s.groups, [["Alpha", "Gamma", "Beta"]]);
+        assert_eq!(s.session.groups, [["Alpha", "Gamma", "Beta"]]);
 
         // No-ops: onto its own slot, and an ungrouped show onto empty space.
         s.drop_show("Beta", Some("Alpha"));
         s.drop_show("Beta", Some("Beta"));
         s.drop_show("Delta", None);
-        assert_eq!(s.groups, [["Alpha", "Gamma", "Beta"]]);
+        assert_eq!(s.session.groups, [["Alpha", "Gamma", "Beta"]]);
 
         // Out onto empty space: leaves the group; a lone member stays a 1-show group.
         s.drop_show("Gamma", None);
         s.drop_show("Alpha", None);
-        assert_eq!(s.groups, [["Beta"]]);
+        assert_eq!(s.session.groups, [["Beta"]]);
         assert_eq!(s.balance_slots()[1].0.group, Some(0));
-        assert_eq!(saved(&s), s.groups);
+        assert_eq!(saved(&s), s.session.groups);
 
         // Moving between groups keeps the target group's position.
         s.drop_show("Delta", Some("Beta"));
         s.drop_show("Alpha", Some("Gamma"));
         s.drop_show("Delta", Some("Alpha"));
         assert_eq!(
-            s.groups,
+            s.session.groups,
             [own(&["Beta"]), own(&["Alpha", "Gamma", "Delta"])]
         );
         assert_eq!(s.status, "Added 'Delta' to Group 2.");
@@ -851,43 +716,49 @@ mod tests {
     #[test]
     fn auto_sort_packs_ungrouped_shows_and_saves() {
         let (_t, mut s) = balance_setup();
-        let saved = |s: &GuiState| s.store.get_layout(layout::LAST_SESSION).unwrap().groups;
+        let saved = |s: &GuiState| {
+            s.session
+                .store
+                .get_layout(layout::LAST_SESSION)
+                .unwrap()
+                .groups
+        };
 
         // Episodes, target 4 (Gamma): Gamma | Alpha+Beta | Delta.
         s.auto_sort();
-        assert_eq!(s.groups, [["Alpha", "Beta"]]);
+        assert_eq!(s.session.groups, [["Alpha", "Beta"]]);
         assert_eq!(s.status, "Auto-sort created 1 group.");
-        assert_eq!(saved(&s), s.groups);
+        assert_eq!(saved(&s), s.session.groups);
 
         // Seasons heights, target 2: Alpha | Delta | Beta+Gamma.
-        s.groups.clear();
-        s.mode = Mode::Seasons;
+        s.session.groups.clear();
+        s.session.mode = Mode::Seasons;
         s.auto_sort();
-        assert_eq!(s.groups, [["Beta", "Gamma"]]);
+        assert_eq!(s.session.groups, [["Beta", "Gamma"]]);
 
         // Existing groups are kept, and count toward the target (6 here).
-        s.mode = Mode::None;
-        s.groups = vec![own(&["Gamma", "Delta"])];
+        s.session.mode = Mode::None;
+        s.session.groups = vec![own(&["Gamma", "Delta"])];
         s.auto_sort();
         assert_eq!(
-            s.groups,
+            s.session.groups,
             [own(&["Gamma", "Delta"]), own(&["Alpha", "Beta"])]
         );
 
         // Nothing left to sort.
         s.auto_sort();
-        assert_eq!(s.groups.len(), 2);
+        assert_eq!(s.session.groups.len(), 2);
         assert_eq!(s.status, "Auto-sort found no shows that fit together.");
 
         // Wipe: target drops back to the tallest show (4).
         s.wipe_and_auto_sort();
-        assert_eq!(s.groups, [["Alpha", "Beta"]]);
-        assert_eq!(saved(&s), s.groups);
+        assert_eq!(s.session.groups, [["Alpha", "Beta"]]);
+        assert_eq!(saved(&s), s.session.groups);
 
         // Wipe still clears when nothing forms.
-        s.selected = HashSet::from(["Gamma".to_string()]);
+        s.session.selected = HashSet::from(["Gamma".to_string()]);
         s.wipe_and_auto_sort();
-        assert!(s.groups.is_empty() && saved(&s).is_empty());
+        assert!(s.session.groups.is_empty() && saved(&s).is_empty());
     }
 
     #[test]
@@ -898,13 +769,13 @@ mod tests {
             "Please add at least one media directory first."
         );
         s.add_directory(t.path().join("tv")).unwrap();
-        s.selected.clear();
+        s.session.selected.clear();
         assert_eq!(
             s.prepare_generation().err().unwrap().text,
             "Please select/check ('Use?') at least one show."
         );
-        s.selected.insert("Columbo".into());
-        s.mode = Mode::Episodes;
+        s.session.selected.insert("Columbo".into());
+        s.session.mode = Mode::Episodes;
         s.block_size = "0".into();
         assert_eq!(
             s.prepare_generation().err().unwrap().text,
@@ -913,7 +784,7 @@ mod tests {
         s.block_size = " 3 ".into();
         let job = s.prepare_generation().ok().unwrap();
         assert_eq!(job.opts.block_size, 3);
-        assert_eq!(job.output, s.dirs[0].join("interleaved.m3u"));
+        assert_eq!(job.output, s.session.dirs[0].join("interleaved.m3u"));
         assert_eq!(
             job.opts.include,
             Some(HashSet::from(["Columbo".to_string()]))
@@ -933,14 +804,14 @@ mod tests {
         s.save_as("Mine").unwrap();
         assert_eq!(s.title(), "TV Playlist Interleaver — [Mine]");
         s.new_layout();
-        assert!(s.dirs.is_empty() && s.store.active_layout_name.is_none());
+        assert!(s.session.dirs.is_empty() && s.session.store.active_layout_name.is_none());
         s.load_layout("Mine");
-        assert_eq!(s.show_info.len(), 3);
+        assert_eq!(s.session.show_info.len(), 3);
         assert_eq!(s.status, "Loaded layout: Mine");
         s.delete_layout("Mine");
         // "Last Session State" remains and becomes active.
         assert_eq!(
-            s.store.active_layout_name.as_deref(),
+            s.session.store.active_layout_name.as_deref(),
             Some(layout::LAST_SESSION)
         );
         s.delete_layout(layout::LAST_SESSION);

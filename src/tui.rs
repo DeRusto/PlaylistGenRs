@@ -1,12 +1,11 @@
 //! Interactive text menu (Python `interactive_mode`), line for line, over any reader/writer.
 
-use crate::build::{BuildOptions, Mode, ShowOrder, build_playlist};
+use crate::build::{Mode, ShowOrder, build_playlist, resolve_user_path};
 use crate::groups;
-use crate::layout::{self, LayoutStore, State};
-use crate::scan::{ShowInfo, refresh_shows};
-use std::collections::HashSet;
+use crate::layout::{self, LayoutStore};
+use crate::scan::ShowInfo;
+use crate::session::{DirError, Session};
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
 
 const CLEAR: &str = "\x1b[2J\x1b[H";
 
@@ -27,17 +26,7 @@ type Step<T = ()> = Option<T>;
 struct Menu<'a, R, W> {
     input: &'a mut R,
     out: &'a mut W,
-    store: LayoutStore,
-    dirs: Vec<PathBuf>,
-    output: Option<PathBuf>,
-    relative: bool,
-    repeat: bool,
-    mode: Mode,
-    block_size: usize,
-    show_order: ShowOrder,
-    show_info: Vec<ShowInfo>,
-    selected: HashSet<String>,
-    groups: Vec<Vec<String>>,
+    session: Session,
 }
 
 macro_rules! say {
@@ -66,62 +55,17 @@ fn index(tok: &str, len: usize) -> Option<usize> {
 
 impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
     fn new(store: LayoutStore, input: &'a mut R, out: &'a mut W) -> Self {
-        let state = store.startup_state(true);
-        let mut m = Menu {
+        Menu {
             input,
             out,
-            store,
-            dirs: vec![],
-            output: None,
-            relative: false,
-            repeat: false,
-            mode: Mode::None,
-            block_size: 10,
-            show_order: ShowOrder::Alpha,
-            show_info: vec![],
-            selected: HashSet::new(),
-            groups: vec![],
-        };
-        for w in std::mem::take(&mut m.store.warnings) {
-            let _ = writeln!(m.out, "{w}");
+            session: Session::open(store),
         }
-        if let Some(s) = &state {
-            m.dirs = s
-                .dirs
-                .iter()
-                .filter(|d| !d.is_empty())
-                .map(PathBuf::from)
-                .collect();
-            m.output = (!s.output_path.is_empty())
-                .then(|| crate::build::resolve_user_path(&s.output_path));
-            m.relative = s.relative;
-            m.repeat = s.repeat;
-            m.mode = s.interleave_mode;
-            m.block_size = s.block_size;
-            m.show_order = s.show_order;
-        }
-        m.show_info = m.refresh();
-        let all = layout::labels(&m.show_info);
-        match state {
-            Some(s) => {
-                m.selected = s.selected.into_iter().filter(|l| all.contains(l)).collect();
-                m.groups = groups::retain_known(&s.groups, &all);
-            }
-            None => m.selected = all,
-        }
-        m
-    }
-
-    fn refresh(&mut self) -> Vec<ShowInfo> {
-        let mut warnings = vec![];
-        let info = refresh_shows(&self.dirs, &mut warnings);
-        for w in warnings {
-            let _ = writeln!(self.out, "{w}");
-        }
-        info
     }
 
     fn input(&mut self, prompt: &str) -> Step<String> {
+        for w in self.session.warnings.drain(..) {
+            writeln!(self.out, "{w}").ok()?;
+        }
         write!(self.out, "{prompt}").ok()?;
         self.out.flush().ok()?;
         let mut line = String::new();
@@ -136,35 +80,7 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
     }
 
     fn save_state(&mut self) {
-        let state = State {
-            dirs: self
-                .dirs
-                .iter()
-                .map(|d| d.to_string_lossy().into_owned())
-                .collect(),
-            selected: layout::selected_list(&self.selected, &self.show_info),
-            groups: self.groups.clone(),
-            output_path: self
-                .output
-                .as_ref()
-                .map(|o| o.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            relative: self.relative,
-            repeat: self.repeat,
-            show_order: self.show_order,
-            interleave_mode: self.mode,
-            block_size: self.block_size,
-        };
-        if let Err(e) = self.store.autosave(&state) {
-            let _ = writeln!(self.out, "{e}");
-        }
-    }
-
-    fn rescan(&mut self) {
-        let old = layout::labels(&self.show_info);
-        self.show_info = self.refresh();
-        layout::rescan(&old, &self.show_info, &mut self.selected, &mut self.groups);
-        self.save_state();
+        self.session.autosave();
     }
 
     fn print_menu(&mut self) -> Step {
@@ -175,41 +91,42 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
         say!(self, "{rule}");
         say!(self);
         say!(self, "Source directories:");
-        if self.dirs.is_empty() {
+        if self.session.dirs.is_empty() {
             say!(self, "  (none — add at least one with [a])");
         }
-        for (i, d) in self.dirs.iter().enumerate() {
+        for (i, d) in self.session.dirs.iter().enumerate() {
             writeln!(self.out, "  [{}] {}", i + 1, d.display()).ok()?;
         }
         say!(self);
 
-        let out_str = match &self.output {
-            Some(o) => o.display().to_string(),
-            None => "(auto: interleaved.m3u in first source dir)".into(),
+        let out_str = match self.session.output_path.trim() {
+            "" => "(auto: interleaved.m3u in first source dir)".into(),
+            o => o.to_string(),
         };
-        let mode_str = match self.mode {
+        let mode_str = match self.session.mode {
             Mode::None => "1 episode per show".to_string(),
-            Mode::Episodes => format!("{} episodes per show", self.block_size),
+            Mode::Episodes => format!("{} episodes per show", self.session.block_size),
             Mode::Seasons => "1 season per show".to_string(),
         };
-        let n_total = self.show_info.len();
+        let n_total = self.session.show_info.len();
         let n_sel = self
+            .session
             .show_info
             .iter()
-            .filter(|s| self.selected.contains(&s.label))
+            .filter(|s| self.session.selected.contains(&s.label))
             .count();
         let shows_str = if n_total > 0 {
             format!("{n_total} found, {n_sel} selected")
-        } else if !self.dirs.is_empty() {
+        } else if !self.session.dirs.is_empty() {
             "scanning...".into()
         } else {
             "none".into()
         };
-        let groups_str = match self.groups.len() {
+        let groups_str = match self.session.groups.len() {
             0 => "none".to_string(),
             n => format!("{n} defined"),
         };
-        let order_str = if self.show_order == ShowOrder::Alpha {
+        let order_str = if self.session.show_order == ShowOrder::Alpha {
             "alphabetical"
         } else {
             "random"
@@ -222,7 +139,7 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
         say!(
             self,
             "  Path style  : {}",
-            if self.relative {
+            if self.session.relative {
                 "relative"
             } else {
                 "absolute"
@@ -231,17 +148,17 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
         say!(
             self,
             "  Repeat      : {}",
-            if self.repeat { "on" } else { "off" }
+            if self.session.repeat { "on" } else { "off" }
         );
         say!(self, "  Show order  : {order_str}");
         say!(self, "  Mode        : {mode_str}");
         say!(self);
         say!(self, "Commands:");
         say!(self, "  [a] Add source directory");
-        if !self.dirs.is_empty() {
+        if !self.session.dirs.is_empty() {
             say!(self, "  [x] Remove source directory");
         }
-        if !self.show_info.is_empty() {
+        if !self.session.show_info.is_empty() {
             say!(self, "  [w] Select shows");
             say!(self, "  [G] Manage groups");
         }
@@ -250,7 +167,7 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
         say!(self, "  [r] Toggle repeat shorter shows");
         say!(self, "  [n] Toggle show order  (alphabetical / random)");
         say!(self, "  [s] Set interleave mode");
-        if !self.dirs.is_empty() && !self.selected.is_empty() {
+        if !self.session.dirs.is_empty() && !self.session.selected.is_empty() {
             say!(self, "  [g] Generate playlist");
         }
         say!(self, "  [q] Quit");
@@ -267,62 +184,62 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
             if choice == "a" {
                 let raw = self.input("Directory path: ")?;
                 if !raw.is_empty() {
-                    let p = crate::build::resolve_user_path(&raw);
-                    if p.is_dir() {
-                        self.dirs.push(p);
-                        write!(self.out, "Scanning...\r").ok()?;
-                        self.out.flush().ok()?;
-                        self.rescan();
-                    } else {
-                        self.input(&format!(
-                            "'{}' is not a valid directory. Press Enter...",
-                            p.display()
-                        ))?;
+                    write!(self.out, "Scanning...\r").ok()?;
+                    self.out.flush().ok()?;
+                    let problem = match self.session.add_dir(&resolve_user_path(&raw)) {
+                        Ok(_) => None,
+                        Err(DirError::NotADirectory(p)) => {
+                            Some(format!("'{}' is not a valid directory.", p.display()))
+                        }
+                        Err(DirError::AlreadyAdded(p)) => {
+                            Some(format!("'{}' is already added.", p.display()))
+                        }
+                    };
+                    self.save_state();
+                    if let Some(text) = problem {
+                        self.input(&format!("{text} Press Enter..."))?;
                     }
                 }
-            } else if choice == "x" && !self.dirs.is_empty() {
-                if self.dirs.len() == 1 {
-                    self.dirs.clear();
-                    self.show_info.clear();
-                    self.selected.clear();
-                    self.groups.clear();
+            } else if choice == "x" && !self.session.dirs.is_empty() {
+                if self.session.dirs.len() == 1 {
+                    self.session.remove_dir(0);
                     self.save_state();
                 } else {
                     self.clear()?;
                     say!(self, "Remove which directory?\n");
-                    for (i, d) in self.dirs.iter().enumerate() {
+                    for (i, d) in self.session.dirs.iter().enumerate() {
                         writeln!(self.out, "  [{}] {}", i + 1, d.display()).ok()?;
                     }
                     let raw = self.input("\nNumber (Enter to cancel): ")?;
-                    if let Some(i) = index(&raw, self.dirs.len()) {
-                        self.dirs.remove(i);
+                    if let Some(i) = index(&raw, self.session.dirs.len()) {
                         write!(self.out, "Scanning...\r").ok()?;
                         self.out.flush().ok()?;
-                        self.rescan();
+                        self.session.remove_dir(i);
+                        self.save_state();
                     }
                 }
-            } else if choice == "w" && !self.show_info.is_empty() {
+            } else if choice == "w" && !self.session.show_info.is_empty() {
                 // Save even if input ends (Ctrl-D) inside the submenu.
                 let step = self.selection_screen();
                 self.save_state();
                 step?;
-            } else if raw_choice == "G" && !self.show_info.is_empty() {
+            } else if raw_choice == "G" && !self.session.show_info.is_empty() {
                 // Save even if input ends (Ctrl-D) inside the submenu.
                 let step = self.groups_screen();
                 self.save_state();
                 step?;
             } else if choice == "o" {
                 let raw = self.input("Output file path (Enter for auto): ")?;
-                self.output = (!raw.is_empty()).then(|| crate::build::resolve_user_path(&raw));
+                self.session.output_path = raw;
                 self.save_state();
             } else if choice == "p" {
-                self.relative = !self.relative;
+                self.session.relative = !self.session.relative;
                 self.save_state();
             } else if choice == "r" {
-                self.repeat = !self.repeat;
+                self.session.repeat = !self.session.repeat;
                 self.save_state();
             } else if choice == "n" {
-                self.show_order = match self.show_order {
+                self.session.show_order = match self.session.show_order {
                     ShowOrder::Alpha => ShowOrder::Random,
                     ShowOrder::Random => ShowOrder::Alpha,
                 };
@@ -332,7 +249,10 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
                 let step = self.mode_submenu();
                 self.save_state();
                 step?;
-            } else if choice == "g" && !self.dirs.is_empty() && !self.selected.is_empty() {
+            } else if choice == "g"
+                && !self.session.dirs.is_empty()
+                && !self.session.selected.is_empty()
+            {
                 self.generate()?;
             } else if choice == "q" {
                 return Some(());
@@ -341,27 +261,12 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
     }
 
     fn generate(&mut self) -> Step {
-        let out = self
-            .output
-            .clone()
-            .unwrap_or_else(|| self.dirs[0].join("interleaved.m3u"));
-        let include = self
-            .show_info
-            .iter()
-            .filter(|s| self.selected.contains(&s.label))
-            .map(|s| s.label.clone())
-            .collect();
-        say!(self);
-        let opts = BuildOptions {
-            relative: self.relative,
-            repeat: self.repeat,
-            mode: self.mode,
-            block_size: self.block_size,
-            include: Some(include),
-            groups: self.groups.clone(),
-            show_order: self.show_order,
+        let Some(out) = self.session.output() else {
+            return Some(());
         };
-        let r = build_playlist(&self.dirs, &out, &opts, &mut rand::rng());
+        say!(self);
+        let opts = self.session.build_options();
+        let r = build_playlist(&self.session.dirs, &out, &opts, &mut rand::rng());
         for line in r.warnings.iter().chain(&r.summary_lines()).chain(&r.error) {
             say!(self, "{line}");
         }
@@ -399,20 +304,20 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
         say!(self);
         let choice = self.input("Choice: ")?.to_lowercase();
         match choice.as_str() {
-            "1" => self.mode = Mode::None,
+            "1" => self.session.mode = Mode::None,
             "2" => {
                 let raw = self.input(&format!(
                     "Episodes per show per round [{}]: ",
-                    self.block_size
+                    self.session.block_size
                 ))?;
                 if is_digits(&raw)
                     && let Ok(n @ 1..) = raw.parse::<usize>()
                 {
-                    self.block_size = n;
+                    self.session.block_size = n;
                 }
-                self.mode = Mode::Episodes;
+                self.session.mode = Mode::Episodes;
             }
-            "3" => self.mode = Mode::Seasons,
+            "3" => self.session.mode = Mode::Seasons,
             _ => {}
         }
         Some(())
@@ -426,6 +331,7 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
 
     fn selection_screen(&mut self) -> Step {
         let max_name = self
+            .session
             .show_info
             .iter()
             .map(|s| s.label.chars().count())
@@ -433,19 +339,20 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
             .unwrap_or(10);
         loop {
             self.clear()?;
-            let n_total = self.show_info.len();
+            let n_total = self.session.show_info.len();
             let n_sel = self
+                .session
                 .show_info
                 .iter()
-                .filter(|s| self.selected.contains(&s.label))
+                .filter(|s| self.session.selected.contains(&s.label))
                 .count();
             let rule = "─".repeat(54);
             say!(self, "{rule}");
             say!(self, "  Show Selection  ({n_sel}/{n_total} selected)");
             say!(self, "{rule}");
             say!(self);
-            for (i, s) in self.show_info.iter().enumerate() {
-                let mark = if self.selected.contains(&s.label) {
+            for (i, s) in self.session.show_info.iter().enumerate() {
+                let mark = if self.session.selected.contains(&s.label) {
                     "✓"
                 } else {
                     " "
@@ -460,14 +367,14 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
             let raw = self.input("  > ")?.to_lowercase();
             match raw.as_str() {
                 "b" => return Some(()),
-                "a" => self.selected = layout::labels(&self.show_info),
-                "n" => self.selected.clear(),
+                "a" => self.session.selected = layout::labels(&self.session.show_info),
+                "n" => self.session.selected.clear(),
                 _ => {
                     for tok in raw.replace(',', " ").split_whitespace() {
-                        if let Some(i) = index(tok, self.show_info.len()) {
-                            let label = &self.show_info[i].label;
-                            if !self.selected.remove(label) {
-                                self.selected.insert(label.clone());
+                        if let Some(i) = index(tok, self.session.show_info.len()) {
+                            let label = &self.session.show_info[i].label;
+                            if !self.session.selected.remove(label) {
+                                self.session.selected.insert(label.clone());
                             }
                         }
                     }
@@ -479,9 +386,10 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
     fn groups_screen(&mut self) -> Step {
         loop {
             let visible: Vec<ShowInfo> = self
+                .session
                 .show_info
                 .iter()
-                .filter(|s| self.selected.contains(&s.label))
+                .filter(|s| self.session.selected.contains(&s.label))
                 .cloned()
                 .collect();
             if visible.is_empty() {
@@ -493,10 +401,10 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
                 .map(|s| s.label.chars().count())
                 .max()
                 .unwrap_or(10);
-            let n_groups = self.groups.len();
+            let n_groups = self.session.groups.len();
             let mut rows = Vec::new();
             for (i, s) in visible.iter().enumerate() {
-                let tag = match groups::group_of(&self.groups, &s.label) {
+                let tag = match groups::group_of(&self.session.groups, &s.label) {
                     Some(g) => format!("G{}", g + 1),
                     None => "●".into(),
                 };
@@ -549,25 +457,32 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
                         }
                     }
                     if !new_group.is_empty() {
-                        groups::create(&mut self.groups, &new_group);
+                        groups::create(&mut self.session.groups, &new_group);
                     }
                 }
                 ("a", 3) => {
                     if let (Some(g), Some(i)) = (
-                        index(tokens[1], self.groups.len()),
+                        index(tokens[1], self.session.groups.len()),
                         index(tokens[2], visible.len()),
                     ) {
-                        groups::add(&mut self.groups, g, std::slice::from_ref(&visible[i].label));
+                        groups::add(
+                            &mut self.session.groups,
+                            g,
+                            std::slice::from_ref(&visible[i].label),
+                        );
                     }
                 }
                 ("r", 2) => {
                     if let Some(i) = index(tokens[1], visible.len()) {
-                        groups::remove(&mut self.groups, std::slice::from_ref(&visible[i].label));
+                        groups::remove(
+                            &mut self.session.groups,
+                            std::slice::from_ref(&visible[i].label),
+                        );
                     }
                 }
                 ("d", 2) => {
-                    if let Some(g) = index(tokens[1], self.groups.len()) {
-                        groups::dissolve(&mut self.groups, g);
+                    if let Some(g) = index(tokens[1], self.session.groups.len()) {
+                        groups::dissolve(&mut self.session.groups, g);
                     }
                 }
                 _ => {}

@@ -140,23 +140,23 @@ fn delete_active_picks_first_remaining() {
 }
 
 #[test]
-fn startup_fallbacks() {
+fn startup_state_is_active_then_last_session() {
     let t = TempDir::new().unwrap();
     let mut store = LayoutStore::new(t.path().join("l.json"));
-    assert_eq!(store.startup_state(true), None);
+    assert_eq!(store.startup_state(), None);
     store
         .layouts
         .insert("First".into(), serde_json::to_value(sample()).unwrap());
     store.active_layout_name = None;
-    assert_eq!(store.startup_state(false), None);
-    assert_eq!(store.startup_state(true), Some(sample()));
+    // No fallback to the first layout.
+    assert_eq!(store.startup_state(), None);
     store.layouts.insert(
         LAST_SESSION.into(),
         serde_json::to_value(State::default()).unwrap(),
     );
-    assert_eq!(store.startup_state(false), Some(State::default()));
+    assert_eq!(store.startup_state(), Some(State::default()));
     store.active_layout_name = Some("First".into());
-    assert_eq!(store.startup_state(false), Some(sample()));
+    assert_eq!(store.startup_state(), Some(sample()));
 }
 
 #[test]
@@ -185,16 +185,6 @@ fn info(labels: &[&str]) -> Vec<ShowInfo> {
             n_episodes: 1,
         })
         .collect()
-}
-
-#[test]
-fn rescan_keeps_selection_and_autoselects_new() {
-    let old: HashSet<String> = sv(&["A", "B", "C"]).into_iter().collect();
-    let mut selected: HashSet<String> = sv(&["A", "C"]).into_iter().collect();
-    let mut groups = gv(&[&["A", "C"], &["C"], &["B"]]);
-    rescan(&old, &info(&["A", "B", "D"]), &mut selected, &mut groups);
-    assert_eq!(selected, sv(&["A", "D"]).into_iter().collect());
-    assert_eq!(groups, gv(&[&["A"], &["B"]]));
 }
 
 #[test]

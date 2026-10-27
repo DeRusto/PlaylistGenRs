@@ -138,6 +138,26 @@ fn selection_and_groups_screens() {
 }
 
 #[test]
+fn duplicate_directory_refused_and_output_saved_as_typed() {
+    let t = TempDir::new().unwrap();
+    let tv = t.path().join("tv");
+    tree(&tv, &[("A", &["a.mkv"])]);
+    let lf = t.path().join("l.json");
+    let screen = drive(
+        &lf,
+        &format!("a\n{0}\na\n{0}/../tv\n\no\nout.m3u\nq\n", tv.display()),
+    );
+    assert!(
+        screen.contains("is already added. Press Enter..."),
+        "{screen}"
+    );
+    assert!(screen.contains("  Output      : out.m3u\n"));
+    let s = LayoutStore::new(lf).get_layout(LAST_SESSION).unwrap();
+    assert_eq!(s.dirs.len(), 1);
+    assert_eq!(s.output_path, "out.m3u");
+}
+
+#[test]
 fn add_to_group_uses_numbers_as_listed() {
     let t = TempDir::new().unwrap();
     let tv = t.path().join("tv");
