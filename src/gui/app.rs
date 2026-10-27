@@ -1,7 +1,7 @@
 //! egui rendering for the GUI; all state changes go through `GuiState`.
 
 use super::dialogs::{self, Dialog, Outcome};
-use super::state::{BalanceSlot, GuiState, Kind, Msg, msg};
+use super::state::{GuiState, Kind, Msg, msg};
 use crate::build::{BuildReport, Mode, ShowOrder, build_playlist};
 use crate::layout;
 use eframe::egui::{self, Key, RichText, Ui};
@@ -406,8 +406,8 @@ impl App {
         }
     }
 
-    /// One stacked column per slot, scaled to the tallest; drag a show's segment onto
-    /// another slot to group them, or onto empty space to take it out of its group.
+    /// One stacked column per slot, its height in turns, scaled to the longest; drag a show's
+    /// segment onto another slot to group them, or onto empty space to take it out of its group.
     fn balance_view(&mut self, ui: &mut Ui) {
         let slots = self.s.balance_slots();
         if slots.is_empty() {
@@ -425,12 +425,7 @@ impl App {
                 }
             }
         });
-        let tallest = slots
-            .iter()
-            .map(BalanceSlot::total)
-            .max()
-            .unwrap_or(0)
-            .max(1);
+        let tallest = slots.iter().map(|(_, t)| *t).max().unwrap_or(0).max(1);
         let ctx = ui.ctx().clone();
         let payload = egui::DragAndDrop::payload::<String>(&ctx);
         let pointer = ui.input(|i| i.pointer.interact_pos());
@@ -456,16 +451,19 @@ impl App {
                 painter.hline(area.x_range(), top, egui::Stroke::new(1.0, v.warn_fg_color));
 
                 let mut target = None;
-                for (i, slot) in slots.iter().enumerate() {
+                for (i, (slot, turns)) in slots.iter().enumerate() {
                     let x = area.left() + SLOT_GAP + i as f32 * (SLOT_W + SLOT_GAP);
                     let fill = if slot.group.is_some() {
                         v.selection.bg_fill
                     } else {
                         v.widgets.inactive.weak_bg_fill
                     };
+                    // Members are sized in episodes (or seasons), sharing the slot's turns.
+                    let sizes: Vec<usize> = slot.members.iter().map(|l| self.s.size(l)).collect();
+                    let total = sizes.iter().sum::<usize>().max(1) as f32;
                     let mut y = bottom;
-                    for (label, h) in &slot.members {
-                        let seg_h = *h as f32 * scale;
+                    for (label, h) in slot.members.iter().zip(sizes) {
+                        let seg_h = h as f32 / total * *turns as f32 * scale;
                         let (lo, hi) = (egui::pos2(x, y - seg_h), egui::pos2(x + SLOT_W, y));
                         let seg = egui::Rect::from_min_max(lo, hi);
                         y -= seg_h;
@@ -499,7 +497,7 @@ impl App {
                     let stack = egui::Rect::from_min_max(lo, hi);
                     let name = match slot.group {
                         Some(g) => format!("Group {}", g + 1),
-                        None => slot.members[0].0.clone(),
+                        None => slot.members[0].clone(),
                     };
                     let name_row = egui::Rect::from_min_max(
                         egui::pos2(x, bottom + 2.0),
@@ -515,14 +513,14 @@ impl App {
                     painter.text(
                         egui::pos2(stack.center().x, y - 2.0),
                         egui::Align2::CENTER_BOTTOM,
-                        slot.total().to_string(),
+                        turns.to_string(),
                         font.clone(),
                         v.text_color(),
                     );
                     if payload.is_some() && pointer.is_some_and(|p| stack.contains(p)) {
                         let edge = egui::StrokeKind::Outside;
                         painter.rect_stroke(stack, 2.0, v.selection.stroke, edge);
-                        target = Some(slot.members[0].0.clone());
+                        target = Some(slot.members[0].clone());
                     }
                 }
                 if released

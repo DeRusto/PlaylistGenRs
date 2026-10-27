@@ -3,8 +3,9 @@
 
 use crate::build::{BuildOptions, BuildReport, Mode, ShowOrder, resolve, resolve_user_path};
 use crate::layout::{self, LayoutStore, State};
+use crate::rotation::{self, Slot};
 use crate::scan::{ShowInfo, refresh_shows};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// A message box: (kind, title, text).
@@ -32,22 +33,6 @@ pub fn msg(kind: Kind, title: &str, text: impl Into<String>) -> Msg {
 
 fn need_selection(text: &str) -> Msg {
     msg(Kind::Warning, "Selection Required", text)
-}
-
-/// One slot in the Balance view: a used show, or a group's used members.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BalanceSlot {
-    /// Index into `GuiState::groups`, or `None` for an ungrouped show.
-    pub group: Option<usize>,
-    /// (label, height) per member, in group order. Height is seasons in seasons mode,
-    /// else episodes.
-    pub members: Vec<(String, usize)>,
-}
-
-impl BalanceSlot {
-    pub fn total(&self) -> usize {
-        self.members.iter().map(|(_, h)| h).sum()
-    }
 }
 
 /// Everything a background generation run needs.
@@ -248,16 +233,12 @@ impl GuiState {
         self.anchor = Some(idx);
     }
 
-    /// Text in the Group column: only for used shows; the last group listing a show wins.
+    /// Text in the Group column: only for used shows, naming the group they play in.
     pub fn group_text(&self, label: &str) -> String {
         if !self.selected.contains(label) {
             return String::new();
         }
-        match self
-            .groups
-            .iter()
-            .rposition(|g| g.iter().any(|l| l == label))
-        {
+        match self.group_of(label) {
             Some(g) => format!("Group {}", g + 1),
             None => String::new(),
         }
@@ -360,47 +341,34 @@ impl GuiState {
 
     // --- Balance view ---
 
-    /// The group a show plays in, by the build's rule: the first group listing it.
     fn group_of(&self, label: &str) -> Option<usize> {
-        self.groups
-            .iter()
-            .position(|g| g.iter().any(|l| l == label))
+        rotation::group_of(&self.groups, label)
     }
 
-    /// Slots of used shows in the order the build places them, with heights for `mode`.
-    pub fn balance_slots(&self) -> Vec<BalanceSlot> {
-        let seasons = self.mode == Mode::Seasons;
-        let heights: HashMap<&str, usize> = self
+    /// What `label` adds to its slot: seasons in seasons mode, else episodes.
+    pub fn size(&self, label: &str) -> usize {
+        self.show_info
+            .iter()
+            .find(|s| s.label == label)
+            .map_or(0, |s| rotation::size(s, self.mode))
+    }
+
+    /// Slots of used shows in the order the build places them, each with its turns.
+    pub fn balance_slots(&self) -> Vec<(Slot, usize)> {
+        let used: Vec<&str> = self
             .show_info
             .iter()
             .filter(|s| self.selected.contains(&s.label))
-            .map(|s| {
-                let h = if seasons { s.n_seasons } else { s.n_episodes };
-                (s.label.as_str(), h)
-            })
+            .map(|s| s.label.as_str())
             .collect();
-        let mut placed = HashSet::new();
-        let mut out = vec![];
-        for s in &self.show_info {
-            let Some(&h) = heights.get(s.label.as_str()) else {
-                continue;
-            };
-            match self.group_of(&s.label) {
-                Some(g) if !placed.insert(g) => {}
-                Some(g) => out.push(BalanceSlot {
-                    group: Some(g),
-                    members: self.groups[g]
-                        .iter()
-                        .filter_map(|l| heights.get(l.as_str()).map(|&h| (l.clone(), h)))
-                        .collect(),
-                }),
-                None => out.push(BalanceSlot {
-                    group: None,
-                    members: vec![(s.label.clone(), h)],
-                }),
-            }
-        }
-        out
+        let block_size = layout::parse_block_size(&self.block_size);
+        rotation::slots(&used, &self.groups)
+            .into_iter()
+            .map(|slot| {
+                let size = slot.members.iter().map(|l| self.size(l)).sum();
+                (slot, rotation::turns(size, self.mode, block_size))
+            })
+            .collect()
     }
 
     /// Balance-view drop of the used show `label` onto the slot holding `onto`, or onto
@@ -440,17 +408,22 @@ impl GuiState {
         self.auto_save();
     }
 
-    /// Pack ungrouped used shows into new groups no taller than the tallest slot.
+    /// Pack ungrouped used shows into new groups lasting no more turns than the longest slot.
     /// Existing groups are left alone; new ones are appended.
     pub fn auto_sort(&mut self) {
         let slots = self.balance_slots();
-        let target = slots.iter().map(BalanceSlot::total).max().unwrap_or(0);
+        let target = slots.iter().map(|(_, t)| *t).max().unwrap_or(0);
         let shows: Vec<(String, usize)> = slots
             .into_iter()
-            .filter(|s| s.group.is_none())
-            .filter_map(|s| s.members.into_iter().next())
+            .filter(|(s, _)| s.group.is_none())
+            .filter_map(|(s, _)| s.members.into_iter().next())
+            .map(|l| {
+                let h = self.size(&l);
+                (l, h)
+            })
             .collect();
-        let new = layout::pack_groups(&shows, target);
+        let block_size = layout::parse_block_size(&self.block_size);
+        let new = rotation::auto_sort(&shows, target, self.mode, block_size);
         self.status = match new.len() {
             0 => "Auto-sort found no shows that fit together.".into(),
             1 => "Auto-sort created 1 group.".into(),
@@ -797,8 +770,12 @@ mod tests {
     fn slots(s: &GuiState) -> Vec<String> {
         s.balance_slots()
             .iter()
-            .map(|b| {
-                let m: Vec<String> = b.members.iter().map(|(l, h)| format!("{l} {h}")).collect();
+            .map(|(b, _)| {
+                let m: Vec<String> = b
+                    .members
+                    .iter()
+                    .map(|l| format!("{l} {}", s.size(l)))
+                    .collect();
                 m.join(" + ")
             })
             .collect()
@@ -816,14 +793,19 @@ mod tests {
         // The group sits where its first member in show order (Beta) would be.
         assert_eq!(slots(&s), ["Alpha 3", "Gamma 4 + Beta 1"]);
         let b = s.balance_slots();
-        assert_eq!((b[0].group, b[1].group), (None, Some(0)));
-        assert_eq!(b[1].total(), 5);
+        assert_eq!((b[0].0.group, b[1].0.group), (None, Some(0)));
+        assert_eq!(b[1].1, 5);
 
         s.mode = Mode::Seasons;
         assert_eq!(slots(&s), ["Alpha 2", "Gamma 1 + Beta 1"]);
 
-        // Unused members drop out of their group's slot; all-unused groups vanish.
+        // Episodes mode: a slot's turns are its whole episode count in blocks.
         s.mode = Mode::Episodes;
+        s.block_size = "2".into();
+        let turns: Vec<usize> = s.balance_slots().iter().map(|(_, t)| *t).collect();
+        assert_eq!(turns, [2, 3]);
+
+        // Unused members drop out of their group's slot; all-unused groups vanish.
         s.selected.remove("Beta");
         assert_eq!(slots(&s), ["Alpha 3", "Gamma 4"]);
         s.selected.remove("Gamma");
@@ -853,7 +835,7 @@ mod tests {
         s.drop_show("Gamma", None);
         s.drop_show("Alpha", None);
         assert_eq!(s.groups, [["Beta"]]);
-        assert_eq!(s.balance_slots()[1].group, Some(0));
+        assert_eq!(s.balance_slots()[1].0.group, Some(0));
         assert_eq!(saved(&s), s.groups);
 
         // Moving between groups keeps the target group's position.
@@ -885,7 +867,7 @@ mod tests {
         assert_eq!(s.groups, [["Beta", "Gamma"]]);
 
         // Existing groups are kept, and count toward the target (6 here).
-        s.mode = Mode::Episodes;
+        s.mode = Mode::None;
         s.groups = vec![own(&["Gamma", "Delta"])];
         s.auto_sort();
         assert_eq!(

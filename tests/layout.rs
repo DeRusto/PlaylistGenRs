@@ -232,35 +232,6 @@ fn gui_add_tracks_target_identity() {
     assert_eq!(g, gv(&[&["C"], &["A", "B"]]));
 }
 
-fn hv(v: &[(&str, usize)]) -> Vec<(String, usize)> {
-    v.iter().map(|&(l, h)| (l.to_string(), h)).collect()
-}
-
-#[test]
-fn pack_groups_first_fit_tallest_first() {
-    // One long show fills its group alone (dropped); the short ones share one, and the
-    // leftover that fits nowhere is alone (dropped).
-    let shows = hv(&[("d", 2), ("c", 3), ("Long", 10), ("b", 3), ("a", 3)]);
-    assert_eq!(pack_groups(&shows, 10), gv(&[&["a", "b", "c"]]));
-
-    // Nothing fits together.
-    assert!(pack_groups(&hv(&[("X", 6), ("Y", 5)]), 10).is_empty());
-
-    // Equal heights tie-break alphabetically; exactly reaching the target is allowed.
-    let shows = hv(&[("C", 5), ("B", 5), ("A", 5)]);
-    assert_eq!(pack_groups(&shows, 10), gv(&[&["A", "B"]]));
-    // ...ignoring case, like the show list.
-    let shows = hv(&[("Beta", 5), ("alpha", 5), ("Gamma", 5)]);
-    assert_eq!(pack_groups(&shows, 10), gv(&[&["alpha", "Beta"]]));
-
-    // Later shows fill earlier groups first.
-    let shows = hv(&[("A", 6), ("B", 5), ("C", 4), ("D", 4), ("E", 1)]);
-    assert_eq!(
-        pack_groups(&shows, 10),
-        gv(&[&["A", "C"], &["B", "D", "E"]])
-    );
-}
-
 #[test]
 fn group_choice_labels() {
     let g = gv(&[&["a", "b"], &["a", "b", "c", "d"]]);

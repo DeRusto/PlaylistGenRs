@@ -4,6 +4,8 @@ Port of [DeRusto/PlaylistGen](https://github.com/DeRusto/PlaylistGen) (branch `c
 
 **Goal:** a single binary I can copy to an offline Linux machine and run. No runtime network access, no Python, no installer.
 
+> Superseded: the Python app is no longer the spec. See [ADR 0001](docs/adr/0001-drop-python-parity.md).
+
 **The Python source is the spec.** Clone it next to this repo as `reference/` (gitignored), and read `playlist_gen.py` and `test_playlist_gen.py` before writing code. Where this plan and the Python behavior disagree, the Python wins unless this plan explicitly lists a deliberate deviation.
 
 ---
