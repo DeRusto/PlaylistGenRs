@@ -453,13 +453,16 @@ impl App {
                     };
                     let mut y = bottom;
                     for (label, h) in &slot.members {
-                        // Keep tiny segments grabbable; the printed total stays exact.
-                        let seg_h = (*h as f32 * scale).max(4.0);
+                        let seg_h = *h as f32 * scale;
                         let (lo, hi) = (egui::pos2(x, y - seg_h), egui::pos2(x + SLOT_W, y));
                         let seg = egui::Rect::from_min_max(lo, hi);
                         y -= seg_h;
+                        // Drawn to scale; only the drag target grows so tiny segments
+                        // stay grabbable.
+                        let grab = egui::vec2(SLOT_W, seg_h.max(6.0));
+                        let hit = egui::Rect::from_center_size(seg.center(), grab);
                         let r = ui
-                            .interact(seg, ui.id().with(("bal", label)), egui::Sense::drag())
+                            .interact(hit, ui.id().with(("bal", label)), egui::Sense::drag())
                             .on_hover_text(format!("{label}: {h}"));
                         r.dnd_set_drag_payload(label.clone());
                         let active = v.widgets.active.bg_fill;
