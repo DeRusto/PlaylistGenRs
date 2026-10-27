@@ -232,34 +232,15 @@ impl LayoutStore {
             .and_then(|n| self.get_layout(n))
     }
 
-    /// State to restore on startup: active → "Last Session State" → (text menu only) first.
-    pub fn startup_state(&self, fall_back_to_first: bool) -> Option<State> {
+    /// State to restore on startup: the active layout, else "Last Session State".
+    pub fn startup_state(&self) -> Option<State> {
         self.get_active_state()
             .or_else(|| self.get_layout(LAST_SESSION))
-            .or_else(|| {
-                fall_back_to_first
-                    .then(|| self.layouts.keys().next().and_then(|n| self.get_layout(n)))
-                    .flatten()
-            })
     }
 }
 
 pub fn labels(info: &[ShowInfo]) -> HashSet<String> {
     info.iter().map(|s| s.label.clone()).collect()
-}
-
-/// After a rescan: keep surviving selections, auto-select newly discovered shows,
-/// strip missing labels from groups.
-pub fn rescan(
-    old_labels: &HashSet<String>,
-    new_info: &[ShowInfo],
-    selected: &mut HashSet<String>,
-    groups: &mut Vec<Vec<String>>,
-) {
-    let new = labels(new_info);
-    selected.retain(|l| new.contains(l));
-    selected.extend(new.difference(old_labels).cloned());
-    *groups = crate::groups::retain_known(groups, &new);
 }
 
 /// Selected labels in a stable order (show order first, then any others sorted).

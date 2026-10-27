@@ -58,11 +58,11 @@ impl App {
     fn settings(&self) -> Settings {
         let s = &self.s;
         (
-            s.output_path.clone(),
-            s.relative,
-            s.repeat,
-            s.show_order,
-            s.mode,
+            s.session.output_path.clone(),
+            s.session.relative,
+            s.session.repeat,
+            s.session.show_order,
+            s.session.mode,
             s.block_size.clone(),
         )
     }
@@ -74,7 +74,7 @@ impl App {
     }
 
     fn save_layout(&mut self) {
-        match self.s.store.active_layout_name.clone() {
+        match self.s.session.store.active_layout_name.clone() {
             Some(name) => {
                 let r = self.s.save_as(&name);
                 self.report(r);
@@ -84,7 +84,13 @@ impl App {
     }
 
     fn save_layout_as(&mut self) {
-        let name = self.s.store.active_layout_name.clone().unwrap_or_default();
+        let name = self
+            .s
+            .session
+            .store
+            .active_layout_name
+            .clone()
+            .unwrap_or_default();
         self.dialogs.push(Dialog::SaveAs { name });
     }
 
@@ -128,7 +134,7 @@ impl App {
 
     fn handle_dialog(&mut self, ctx: &egui::Context) {
         let layouts = self.s.layout_names();
-        let groups = groups::choices(&self.s.groups);
+        let groups = groups::choices(&self.s.session.groups);
         let Some(top) = self.dialogs.last_mut() else {
             return;
         };
@@ -153,7 +159,7 @@ impl App {
                         "Please enter a valid layout name.",
                     );
                     self.dialogs.push(Dialog::Message(m));
-                } else if self.s.store.layouts.contains_key(&trimmed) {
+                } else if self.s.session.store.layouts.contains_key(&trimmed) {
                     self.dialogs.push(Dialog::SaveAs { name });
                     self.dialogs
                         .push(Dialog::ConfirmOverwrite { name: trimmed });
@@ -210,7 +216,7 @@ impl App {
                     } else {
                         p
                     };
-                    self.s.output_path = p.to_string_lossy().into_owned();
+                    self.s.session.output_path = p.to_string_lossy().into_owned();
                 }
                 None => {}
             }
@@ -239,7 +245,7 @@ impl App {
                         );
                         self.dialogs.push(Dialog::Message(m));
                     } else {
-                        let active = self.s.store.active_layout_name.as_ref();
+                        let active = self.s.session.store.active_layout_name.as_ref();
                         let idx = names.iter().position(|n| Some(n) == active).unwrap_or(0);
                         self.dialogs.push(Dialog::Load { idx });
                     }
@@ -272,7 +278,7 @@ impl App {
                 .max_height(120.0)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    for (i, d) in self.s.dirs.iter().enumerate() {
+                    for (i, d) in self.s.session.dirs.iter().enumerate() {
                         if ui
                             .selectable_label(self.s.dir_sel == Some(i), d.display().to_string())
                             .clicked()
@@ -301,35 +307,37 @@ impl App {
                 .show(ui, |ui| {
                     ui.label("Interleave Mode:");
                     egui::ComboBox::from_id_salt("mode")
-                        .selected_text(self.s.mode.as_str())
+                        .selected_text(self.s.session.mode.as_str())
                         .show_ui(ui, |ui| {
                             for m in Mode::ALL {
-                                ui.selectable_value(&mut self.s.mode, m, m.as_str());
+                                ui.selectable_value(&mut self.s.session.mode, m, m.as_str());
                             }
                         });
                     ui.end_row();
                     ui.label("Block Size (N):");
                     let edit =
                         egui::TextEdit::singleline(&mut self.s.block_size).desired_width(60.0);
-                    ui.add_enabled(self.s.mode == Mode::Episodes, edit);
+                    ui.add_enabled(self.s.session.mode == Mode::Episodes, edit);
                     ui.end_row();
                     ui.label("Show Order:");
                     egui::ComboBox::from_id_salt("order")
-                        .selected_text(self.s.show_order.as_str())
+                        .selected_text(self.s.session.show_order.as_str())
                         .show_ui(ui, |ui| {
                             for o in ShowOrder::ALL {
-                                ui.selectable_value(&mut self.s.show_order, o, o.as_str());
+                                ui.selectable_value(&mut self.s.session.show_order, o, o.as_str());
                             }
                         });
                     ui.end_row();
                 });
-            ui.checkbox(&mut self.s.relative, "Write Relative Paths");
-            ui.checkbox(&mut self.s.repeat, "Repeat Shorter Shows");
+            ui.checkbox(&mut self.s.session.relative, "Write Relative Paths");
+            ui.checkbox(&mut self.s.session.repeat, "Repeat Shorter Shows");
             ui.add_space(6.0);
             ui.label("Output Playlist:");
             ui.horizontal(|ui| {
                 let w = ui.available_width() - 36.0;
-                ui.add(egui::TextEdit::singleline(&mut self.s.output_path).desired_width(w));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.s.session.output_path).desired_width(w),
+                );
                 if ui
                     .button("…")
                     .on_hover_text("Save M3U Playlist As")
@@ -347,11 +355,12 @@ impl App {
         let mut clicked: Option<(usize, bool)> = None;
         let rows: Vec<(bool, String, String, String, String, bool)> = self
             .s
+            .session
             .show_info
             .iter()
             .map(|si| {
                 (
-                    self.s.selected.contains(&si.label),
+                    self.s.session.selected.contains(&si.label),
                     si.label.clone(),
                     self.s.group_text(&si.label),
                     si.n_seasons.to_string(),
@@ -419,7 +428,7 @@ impl App {
                 self.s.auto_sort();
             }
             if ui.button("Wipe and auto-sort").clicked() {
-                match self.s.groups.len() {
+                match self.s.session.groups.len() {
                     0 => self.s.wipe_and_auto_sort(),
                     n => self.dialogs.push(Dialog::ConfirmWipe { n }),
                 }
@@ -623,6 +632,7 @@ impl eframe::App for App {
         self.handle_picker(&ctx);
         self.handle_dialog(&ctx);
         self.poll_job(&ctx);
+        self.s.print_warnings();
 
         // Debounced autosave for settings; directory/selection/group changes save at once.
         if self.settings() != before {
@@ -650,5 +660,6 @@ impl eframe::App for App {
             let _ = rx.recv();
         }
         self.s.auto_save();
+        self.s.print_warnings();
     }
 }

@@ -32,6 +32,14 @@ _Avoid_: Shuffle, schedule
 How evenly slots last in the rotation, measured in turns; a balanced rotation has every slot run out at about the same time.
 _Avoid_: Weight
 
+**Layout**:
+A named, saved set of directories, used shows, groups and playlist settings.
+_Avoid_: Profile, preset, config
+
+**Session**:
+The layout being edited in a running app; it autosaves to its layout, or to the "Last Session State" slot when it has no name.
+_Avoid_: Workspace, document
+
 **Auto-sort**:
 Packing ungrouped used shows into new groups so no slot lasts longer than the tallest one; "Wipe and auto-sort" dissolves every group first.
 _Avoid_: Auto-balance, auto-group

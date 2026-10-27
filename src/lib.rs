@@ -11,4 +11,5 @@ pub mod interleave;
 pub mod layout;
 pub mod rotation;
 pub mod scan;
+pub mod session;
 pub mod tui;
