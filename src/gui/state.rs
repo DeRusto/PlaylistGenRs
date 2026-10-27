@@ -34,12 +34,13 @@ fn need_selection(text: &str) -> Msg {
     msg(Kind::Warning, "Selection Required", text)
 }
 
-/// One bar in the Balance view: a used show, or a group's used members.
+/// One slot in the Balance view: a used show, or a group's used members.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BalanceSlot {
     /// Index into `GuiState::groups`, or `None` for an ungrouped show.
     pub group: Option<usize>,
-    /// (label, height in turns) per member, in group order.
+    /// (label, height) per member, in group order. Height is seasons in seasons mode,
+    /// else episodes.
     pub members: Vec<(String, usize)>,
 }
 
@@ -401,8 +402,8 @@ impl GuiState {
     }
 
     /// Balance-view drop of the used show `label` onto the slot holding `onto`, or onto
-    /// empty space (`None`). Drops onto its own slot and of ungrouped shows on empty space
-    /// do nothing.
+    /// empty space (`None`). Dropping onto its own slot, or dropping an ungrouped show on
+    /// empty space, does nothing.
     pub fn drop_show(&mut self, label: &str, onto: Option<&str>) {
         let from = self.group_of(label);
         match onto {
@@ -413,8 +414,8 @@ impl GuiState {
                 layout::remove_from_groups(&mut self.groups, &[label.to_string()]);
                 self.status = format!("Removed '{label}' from its group.");
             }
-            Some(t) if t == label => return,
-            Some(t) => match self.group_of(t) {
+            Some(target) if target == label => return,
+            Some(target) => match self.group_of(target) {
                 Some(g) if from == Some(g) => return,
                 Some(g) => {
                     layout::gui_add_to_group(&mut self.groups, g, &[label.to_string()]);
@@ -426,11 +427,11 @@ impl GuiState {
                     let pair: Vec<String> = self
                         .show_info
                         .iter()
-                        .filter(|s| s.label == label || s.label == t)
+                        .filter(|s| s.label == label || s.label == target)
                         .map(|s| s.label.clone())
                         .collect();
                     layout::create_group(&mut self.groups, &pair);
-                    self.status = format!("Created group with '{t}' and '{label}'.");
+                    self.status = format!("Created group with '{target}' and '{label}'.");
                 }
             },
         }
@@ -763,11 +764,14 @@ mod tests {
         (t, s)
     }
 
-    /// Slots as (label, height) members, for compact asserts.
-    fn bars(s: &GuiState) -> Vec<Vec<(&str, usize)>> {
+    /// Slots as "label height" members joined by " + ", for compact asserts.
+    fn slots(s: &GuiState) -> Vec<String> {
         s.balance_slots()
             .iter()
-            .map(|b| b.members.iter().map(|(l, h)| (l.as_str(), *h)).collect())
+            .map(|b| {
+                let m: Vec<String> = b.members.iter().map(|(l, h)| format!("{l} {h}")).collect();
+                m.join(" + ")
+            })
             .collect()
     }
 
@@ -781,32 +785,26 @@ mod tests {
         s.groups = vec![own(&["Gamma", "Beta"])];
         s.selected.remove("Delta");
         // The group sits where its first member in show order (Beta) would be.
-        assert_eq!(
-            bars(&s),
-            [vec![("Alpha", 3)], vec![("Gamma", 4), ("Beta", 1)]]
-        );
-        let slots = s.balance_slots();
-        assert_eq!((slots[0].group, slots[1].group), (None, Some(0)));
-        assert_eq!(slots[1].total(), 5);
+        assert_eq!(slots(&s), ["Alpha 3", "Gamma 4 + Beta 1"]);
+        let b = s.balance_slots();
+        assert_eq!((b[0].group, b[1].group), (None, Some(0)));
+        assert_eq!(b[1].total(), 5);
 
         s.mode = Mode::Seasons;
-        assert_eq!(
-            bars(&s),
-            [vec![("Alpha", 2)], vec![("Gamma", 1), ("Beta", 1)]]
-        );
+        assert_eq!(slots(&s), ["Alpha 2", "Gamma 1 + Beta 1"]);
 
-        // Unused members drop out of their group's bar; all-unused groups vanish.
+        // Unused members drop out of their group's slot; all-unused groups vanish.
         s.mode = Mode::Episodes;
         s.selected.remove("Beta");
-        assert_eq!(bars(&s), [vec![("Alpha", 3)], vec![("Gamma", 4)]]);
+        assert_eq!(slots(&s), ["Alpha 3", "Gamma 4"]);
         s.selected.remove("Gamma");
-        assert_eq!(bars(&s), [vec![("Alpha", 3)]]);
+        assert_eq!(slots(&s), ["Alpha 3"]);
     }
 
     #[test]
     fn dropping_shows_edits_groups_and_saves() {
         let (_t, mut s) = balance_setup();
-        let saved = |s: &GuiState| s.store.get_active_state().unwrap().groups;
+        let saved = |s: &GuiState| s.store.get_layout(layout::LAST_SESSION).unwrap().groups;
 
         // Single onto single: a new group, in show order.
         s.drop_show("Gamma", Some("Alpha"));

@@ -13,7 +13,7 @@ A show checked for inclusion in the playlist; only used shows appear in the rota
 _Avoid_: Selected show (selection is the highlighted table rows)
 
 **Group**:
-Two or more used shows that share a single slot and play back to back within it.
+Used shows that share a single slot and play back to back within it; made from two or more, though removing members can leave a group of one.
 _Avoid_: Block, bundle
 
 **Slot**:
