@@ -14,11 +14,6 @@ pub struct Slot {
     pub members: Vec<String>,
 }
 
-/// The group `label` plays in: the first one listing it.
-pub fn group_of(groups: &[Vec<String>], label: &str) -> Option<usize> {
-    groups.iter().position(|g| g.iter().any(|l| l == label))
-}
-
 /// Slots for the `used` labels, in their order. A group's slot sits where its first used
 /// member falls; group members that aren't used, or play in an earlier group, are left out.
 pub fn slots<S: AsRef<str>>(used: &[S], groups: &[Vec<String>]) -> Vec<Slot> {

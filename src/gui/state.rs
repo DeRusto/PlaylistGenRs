@@ -2,6 +2,7 @@
 //! Mirrors the Python `InterleaverGUI` methods; rendering lives in `app.rs`.
 
 use crate::build::{BuildOptions, BuildReport, Mode, ShowOrder, resolve, resolve_user_path};
+use crate::groups;
 use crate::layout::{self, LayoutStore, State};
 use crate::rotation::{self, Slot};
 use crate::scan::{ShowInfo, refresh_shows};
@@ -131,7 +132,7 @@ impl GuiState {
             .filter(|l| all.contains(*l))
             .cloned()
             .collect();
-        self.groups = layout::filter_groups(&state.groups, &all);
+        self.groups = groups::retain_known(&state.groups, &all);
         self.output_path = state.output_path.clone();
         self.relative = state.relative;
         self.repeat = state.repeat;
@@ -275,7 +276,7 @@ impl GuiState {
                 "Please select 2 or more shows to create a group.",
             ));
         }
-        layout::create_group(&mut self.groups, &labels);
+        groups::create(&mut self.groups, &labels);
         self.status = format!("Created group with {} shows.", labels.len());
         self.auto_save();
         Ok(())
@@ -302,7 +303,7 @@ impl GuiState {
 
     pub fn add_selected_to_group(&mut self, g_idx: usize) {
         let labels = self.row_labels();
-        layout::gui_add_to_group(&mut self.groups, g_idx, &labels);
+        groups::add(&mut self.groups, g_idx, &labels);
         self.status = format!("Added {} shows to Group {}.", labels.len(), g_idx + 1);
         self.auto_save();
     }
@@ -314,7 +315,7 @@ impl GuiState {
                 "Please select one or more shows to remove from their groups.",
             ));
         }
-        layout::remove_from_groups(&mut self.groups, &labels);
+        groups::remove(&mut self.groups, &labels);
         self.status = "Removed selected shows from their groups.".into();
         self.auto_save();
         Ok(())
@@ -333,7 +334,7 @@ impl GuiState {
 
     pub fn dissolve_group(&mut self, g_idx: usize) {
         if g_idx < self.groups.len() {
-            layout::dissolve_group(&mut self.groups, g_idx);
+            groups::dissolve(&mut self.groups, g_idx);
             self.status = format!("Dissolved Group {}.", g_idx + 1);
             self.auto_save();
         }
@@ -342,7 +343,7 @@ impl GuiState {
     // --- Balance view ---
 
     fn group_of(&self, label: &str) -> Option<usize> {
-        rotation::group_of(&self.groups, label)
+        groups::group_of(&self.groups, label)
     }
 
     /// Slots of used shows in the order the build places them, each with its members'
@@ -382,14 +383,14 @@ impl GuiState {
                 if from.is_none() {
                     return;
                 }
-                layout::remove_from_groups(&mut self.groups, &[label.to_string()]);
+                groups::remove(&mut self.groups, &[label.to_string()]);
                 self.status = format!("Removed '{label}' from its group.");
             }
             Some(target) if target == label => return,
             Some(target) => match self.group_of(target) {
                 Some(g) if from == Some(g) => return,
                 Some(g) => {
-                    layout::gui_add_to_group(&mut self.groups, g, &[label.to_string()]);
+                    groups::add(&mut self.groups, g, &[label.to_string()]);
                     let g = self.group_of(label).expect("just added");
                     self.status = format!("Added '{label}' to Group {}.", g + 1);
                 }
@@ -401,7 +402,7 @@ impl GuiState {
                         .filter(|s| s.label == label || s.label == target)
                         .map(|s| s.label.clone())
                         .collect();
-                    layout::create_group(&mut self.groups, &pair);
+                    groups::create(&mut self.groups, &pair);
                     self.status = format!("Created group with '{target}' and '{label}'.");
                 }
             },
