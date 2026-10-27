@@ -1,7 +1,7 @@
 //! egui rendering for the GUI; all state changes go through `GuiState`.
 
 use super::dialogs::{self, Dialog, Outcome};
-use super::state::{GuiState, Kind, Msg, msg};
+use super::state::{BalanceSlot, GuiState, Kind, Msg, msg};
 use crate::build::{BuildReport, Mode, ShowOrder, build_playlist};
 use crate::layout;
 use eframe::egui::{self, Key, RichText, Ui};
@@ -12,11 +12,20 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(500);
+const BAR_W: f32 = 64.0;
+const BAR_GAP: f32 = 12.0;
 
 #[derive(PartialEq)]
 enum Picking {
     Dir,
     Output,
+}
+
+/// What the "TV Shows Discovered" panel shows.
+#[derive(PartialEq)]
+enum View {
+    Table,
+    Balance,
 }
 
 type Settings = (String, bool, bool, ShowOrder, Mode, String);
@@ -26,6 +35,7 @@ pub struct App {
     dialogs: Vec<Dialog>,
     picker: FileDialog,
     picking: Option<Picking>,
+    view: View,
     job: Option<(PathBuf, Receiver<BuildReport>)>,
     autosave_at: Option<Instant>,
     title: String,
@@ -38,6 +48,7 @@ impl App {
             dialogs: vec![],
             picker: FileDialog::new(),
             picking: None,
+            view: View::Table,
             job: None,
             autosave_at: None,
             title: String::new(),
@@ -394,6 +405,99 @@ impl App {
         }
     }
 
+    /// One bar per slot, scaled to the tallest; drag a show's segment onto another bar to
+    /// group them, or onto empty space to take it out of its group.
+    fn balance_view(&mut self, ui: &mut Ui) {
+        let slots = self.s.balance_slots();
+        if slots.is_empty() {
+            ui.label("Check ('Use?') some shows to see them here.");
+            return;
+        }
+        let tallest = slots.iter().map(BalanceSlot::total).max().unwrap_or(0).max(1);
+        let ctx = ui.ctx().clone();
+        let payload = egui::DragAndDrop::payload::<String>(&ctx);
+        let pointer = ui.input(|i| i.pointer.interact_pos());
+        let released = ui.input(|i| i.pointer.any_released());
+        let mut dropped: Option<(String, Option<String>)> = None;
+
+        egui::ScrollArea::horizontal().id_salt("balance").show(ui, |ui| {
+            let width = slots.len() as f32 * (BAR_W + BAR_GAP) + BAR_GAP;
+            let height = ui.available_height().max(150.0);
+            let size = egui::vec2(width, height);
+            let (area, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let painter = ui.painter_at(area);
+            let v = ui.visuals().clone();
+            let font = egui::FontId::proportional(12.0);
+            let (top, bottom) = (area.top() + 20.0, area.bottom() - 4.0);
+            let scale = (bottom - top) / tallest as f32;
+            painter.hline(area.x_range(), top, egui::Stroke::new(1.0, v.warn_fg_color));
+
+            let mut target = None;
+            for (i, slot) in slots.iter().enumerate() {
+                let x = area.left() + BAR_GAP + i as f32 * (BAR_W + BAR_GAP);
+                let fill = if slot.group.is_some() {
+                    v.selection.bg_fill
+                } else {
+                    v.widgets.inactive.weak_bg_fill
+                };
+                let mut y = bottom;
+                for (label, h) in &slot.members {
+                    // Keep tiny segments grabbable; the printed total stays exact.
+                    let seg_h = (*h as f32 * scale).max(4.0);
+                    let (lo, hi) = (egui::pos2(x, y - seg_h), egui::pos2(x + BAR_W, y));
+                    let seg = egui::Rect::from_min_max(lo, hi);
+                    y -= seg_h;
+                    let r = ui
+                        .interact(seg, ui.id().with(("bal", label)), egui::Sense::drag())
+                        .on_hover_text(format!("{label}: {h}"));
+                    r.dnd_set_drag_payload(label.clone());
+                    let active = v.widgets.active.bg_fill;
+                    painter.rect_filled(seg, 2.0, if r.dragged() { active } else { fill });
+                    let edge = egui::StrokeKind::Inside;
+                    painter.rect_stroke(seg, 2.0, v.window_stroke, edge);
+                    if seg_h >= 14.0 {
+                        let clipped = painter.with_clip_rect(seg.shrink(2.0));
+                        clipped.text(
+                            seg.center(),
+                            egui::Align2::CENTER_CENTER,
+                            label,
+                            font.clone(),
+                            v.strong_text_color(),
+                        );
+                    }
+                    if r.dragged() {
+                        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                }
+                let (lo, hi) = (egui::pos2(x, y), egui::pos2(x + BAR_W, bottom));
+                let bar = egui::Rect::from_min_max(lo, hi);
+                painter.text(
+                    egui::pos2(bar.center().x, y - 2.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    slot.total().to_string(),
+                    font.clone(),
+                    v.text_color(),
+                );
+                if payload.is_some() && pointer.is_some_and(|p| bar.contains(p)) {
+                    let edge = egui::StrokeKind::Outside;
+                    painter.rect_stroke(bar, 2.0, v.selection.stroke, edge);
+                    target = Some(slot.members[0].0.clone());
+                }
+            }
+            if released
+                && let Some(p) = &payload
+                && pointer.is_some_and(|p| area.contains(p))
+            {
+                dropped = Some((p.to_string(), target));
+            }
+        });
+
+        if let Some((label, onto)) = dropped {
+            egui::DragAndDrop::clear_payload(&ctx);
+            self.s.drop_show(&label, onto.as_deref());
+        }
+    }
+
     fn group_buttons(&mut self, ui: &mut Ui) {
         ui.group(|ui| {
             ui.strong("Group Management");
@@ -454,9 +558,17 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| {
             let table_h = (ui.available_height() - 80.0).max(100.0);
             ui.group(|ui| {
-                ui.strong("TV Shows Discovered");
+                ui.horizontal(|ui| {
+                    ui.strong("TV Shows Discovered");
+                    ui.add_space(8.0);
+                    ui.selectable_value(&mut self.view, View::Table, "Table");
+                    ui.selectable_value(&mut self.view, View::Balance, "Balance");
+                });
                 ui.allocate_ui(egui::vec2(ui.available_width(), table_h), |ui| {
-                    self.shows_table(ui)
+                    match self.view {
+                        View::Table => self.shows_table(ui),
+                        View::Balance => self.balance_view(ui),
+                    }
                 });
             });
             ui.add_space(10.0);
