@@ -4,6 +4,7 @@ use fixtures::{playlist_names, tree};
 use playlistgenrs::build::{Mode, ShowOrder};
 use playlistgenrs::layout::{LAST_SESSION, LayoutStore, State};
 use playlistgenrs::tui::run_menu_with;
+use std::fs;
 use tempfile::TempDir;
 
 fn drive(store_file: &std::path::Path, script: &str) -> String {
@@ -135,6 +136,30 @@ fn selection_and_groups_screens() {
     let s = LayoutStore::new(lf).get_layout(LAST_SESSION).unwrap();
     assert_eq!(s.selected, ["A", "B"]);
     assert_eq!(s.groups, [["A", "B"]]);
+}
+
+#[test]
+fn save_error_shown_when_input_ends_in_submenu() {
+    let t = TempDir::new().unwrap();
+    let tv = t.path().join("tv");
+    tree(&tv, &[("A", &["a.mkv"])]);
+    // The layout file's folder is a regular file, so every save fails.
+    fs::write(t.path().join("blocker"), "").unwrap();
+    let lf = t.path().join("blocker/l.json");
+    let screen = drive(
+        &lf,
+        &format!(
+            "a
+{}
+w
+",
+            tv.display()
+        ),
+    );
+    let err = screen
+        .rfind("Error: Failed to save layouts")
+        .expect(&screen);
+    assert!(err > screen.rfind("Show Selection").unwrap(), "{screen}");
 }
 
 #[test]

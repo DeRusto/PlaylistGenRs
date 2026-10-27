@@ -63,9 +63,7 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
     }
 
     fn input(&mut self, prompt: &str) -> Step<String> {
-        for w in self.session.warnings.drain(..) {
-            writeln!(self.out, "{w}").ok()?;
-        }
+        self.print_warnings();
         write!(self.out, "{prompt}").ok()?;
         self.out.flush().ok()?;
         let mut line = String::new();
@@ -79,8 +77,16 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
         write!(self.out, "{CLEAR}").ok()
     }
 
+    /// Autosave, printing any error at once: the menu may be about to exit.
     fn save_state(&mut self) {
         self.session.autosave();
+        self.print_warnings();
+    }
+
+    fn print_warnings(&mut self) {
+        for w in self.session.warnings.drain(..) {
+            let _ = writeln!(self.out, "{w}");
+        }
     }
 
     fn print_menu(&mut self) -> Step {
