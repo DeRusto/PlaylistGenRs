@@ -440,6 +440,33 @@ impl GuiState {
         self.auto_save();
     }
 
+    /// Pack ungrouped used shows into new groups no taller than the tallest slot.
+    /// Existing groups are left alone; new ones are appended.
+    pub fn auto_sort(&mut self) {
+        let slots = self.balance_slots();
+        let target = slots.iter().map(BalanceSlot::total).max().unwrap_or(0);
+        let shows: Vec<(String, usize)> = slots
+            .into_iter()
+            .filter(|s| s.group.is_none())
+            .filter_map(|s| s.members.into_iter().next())
+            .collect();
+        let new = layout::pack_groups(&shows, target);
+        self.status = match new.len() {
+            0 => "Auto-sort found no shows that fit together.".into(),
+            1 => "Auto-sort created 1 group.".into(),
+            n => format!("Auto-sort created {n} groups."),
+        };
+        self.groups.extend(new);
+        self.auto_save();
+    }
+
+    /// Dissolve every group, then auto-sort all used shows (target: the tallest show).
+    /// The app confirms first.
+    pub fn wipe_and_auto_sort(&mut self) {
+        self.groups.clear();
+        self.auto_sort();
+    }
+
     // --- Generation ---
 
     pub fn prepare_generation(&mut self) -> Result<Job, Msg> {
@@ -838,6 +865,48 @@ mod tests {
             [own(&["Beta"]), own(&["Alpha", "Gamma", "Delta"])]
         );
         assert_eq!(s.status, "Added 'Delta' to Group 2.");
+    }
+
+    #[test]
+    fn auto_sort_packs_ungrouped_shows_and_saves() {
+        let (_t, mut s) = balance_setup();
+        let saved = |s: &GuiState| s.store.get_layout(layout::LAST_SESSION).unwrap().groups;
+
+        // Episodes, target 4 (Gamma): Gamma | Alpha+Beta | Delta.
+        s.auto_sort();
+        assert_eq!(s.groups, [["Alpha", "Beta"]]);
+        assert_eq!(s.status, "Auto-sort created 1 group.");
+        assert_eq!(saved(&s), s.groups);
+
+        // Seasons heights, target 2: Alpha | Delta | Beta+Gamma.
+        s.groups.clear();
+        s.mode = Mode::Seasons;
+        s.auto_sort();
+        assert_eq!(s.groups, [["Beta", "Gamma"]]);
+
+        // Existing groups are kept, and count toward the target (6 here).
+        s.mode = Mode::Episodes;
+        s.groups = vec![own(&["Gamma", "Delta"])];
+        s.auto_sort();
+        assert_eq!(
+            s.groups,
+            [own(&["Gamma", "Delta"]), own(&["Alpha", "Beta"])]
+        );
+
+        // Nothing left to sort.
+        s.auto_sort();
+        assert_eq!(s.groups.len(), 2);
+        assert_eq!(s.status, "Auto-sort found no shows that fit together.");
+
+        // Wipe: target drops back to the tallest show (4).
+        s.wipe_and_auto_sort();
+        assert_eq!(s.groups, [["Alpha", "Beta"]]);
+        assert_eq!(saved(&s), s.groups);
+
+        // Wipe still clears when nothing forms.
+        s.selected = HashSet::from(["Gamma".to_string()]);
+        s.wipe_and_auto_sort();
+        assert!(s.groups.is_empty() && saved(&s).is_empty());
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub enum Dialog {
     ConfirmDelete { name: String },
     AddToGroup { idx: usize },
     Dissolve { idx: usize },
+    ConfirmWipe { n: usize },
 }
 
 /// What the user chose in the top dialog this frame.
@@ -112,6 +113,11 @@ pub fn show(
                 ui.label("Select group to dissolve:");
                 combo(ui, "dissolve", idx, groups);
                 buttons(ui, "Dissolve", Some("Cancel"))
+            }
+            Dialog::ConfirmWipe { n } => {
+                ui.heading("Wipe and auto-sort");
+                ui.label(format!("This will dissolve all {n} groups. Continue?"));
+                buttons(ui, "Continue", Some("Cancel"))
             }
         }
     });

@@ -31,3 +31,7 @@ _Avoid_: Shuffle, schedule
 **Balance**:
 How evenly slots last in the rotation, measured in turns; a balanced rotation has every slot run out at about the same time.
 _Avoid_: Weight
+
+**Auto-sort**:
+Packing ungrouped used shows into new groups so no slot lasts longer than the tallest one; "Wipe and auto-sort" dissolves every group first.
+_Avoid_: Auto-balance, auto-group

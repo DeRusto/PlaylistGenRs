@@ -179,6 +179,7 @@ impl App {
             Dialog::ConfirmDelete { name } => self.s.delete_layout(&name),
             Dialog::AddToGroup { idx } => self.s.add_selected_to_group(idx),
             Dialog::Dissolve { idx } => self.s.dissolve_group(idx),
+            Dialog::ConfirmWipe { .. } => self.s.wipe_and_auto_sort(),
         }
     }
 
@@ -413,6 +414,17 @@ impl App {
             ui.label("Check ('Use?') some shows to see them here.");
             return;
         }
+        ui.horizontal(|ui| {
+            if ui.button("Auto-sort").clicked() {
+                self.s.auto_sort();
+            }
+            if ui.button("Wipe and auto-sort").clicked() {
+                match self.s.groups.len() {
+                    0 => self.s.wipe_and_auto_sort(),
+                    n => self.dialogs.push(Dialog::ConfirmWipe { n }),
+                }
+            }
+        });
         let tallest = slots
             .iter()
             .map(BalanceSlot::total)

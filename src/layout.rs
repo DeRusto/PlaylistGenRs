@@ -352,6 +352,32 @@ pub fn dissolve_group(groups: &mut Vec<Vec<String>>, g_idx: usize) {
     }
 }
 
+/// Auto-sort: pack `(label, height)` shows into new groups of total height at most
+/// `target`. Tallest first (ties by label), each into the first group it fits, else a new
+/// one. Groups left with a single show are dropped, since a group needs two members.
+pub fn pack_groups(shows: &[(String, usize)], target: usize) -> Vec<Vec<String>> {
+    let mut order: Vec<&(String, usize)> = shows.iter().collect();
+    // Ties use the show list's alphabetical order (lowercase), then exact label.
+    order.sort_by(|a, b| {
+        let key = |l: &String| (l.to_lowercase(), l.clone());
+        b.1.cmp(&a.1).then_with(|| key(&a.0).cmp(&key(&b.0)))
+    });
+    let mut bins: Vec<(usize, Vec<String>)> = vec![];
+    for (label, h) in order {
+        match bins.iter_mut().find(|(total, _)| total + h <= target) {
+            Some((total, g)) => {
+                *total += h;
+                g.push(label.clone());
+            }
+            None => bins.push((*h, vec![label.clone()])),
+        }
+    }
+    bins.into_iter()
+        .map(|(_, g)| g)
+        .filter(|g| g.len() >= 2)
+        .collect()
+}
+
 /// `Group N (a, b, c...)` labels for group pickers: at most 3 names, then `...`.
 pub fn group_choices(groups: &[Vec<String>]) -> Vec<String> {
     groups
