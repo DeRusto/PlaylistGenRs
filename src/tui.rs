@@ -1,6 +1,7 @@
 //! Interactive text menu (Python `interactive_mode`), line for line, over any reader/writer.
 
 use crate::build::{BuildOptions, Mode, ShowOrder, build_playlist};
+use crate::groups;
 use crate::layout::{self, LayoutStore, State};
 use crate::scan::{ShowInfo, refresh_shows};
 use std::collections::HashSet;
@@ -104,7 +105,7 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
         match state {
             Some(s) => {
                 m.selected = s.selected.into_iter().filter(|l| all.contains(l)).collect();
-                m.groups = layout::filter_groups(&s.groups, &all);
+                m.groups = groups::retain_known(&s.groups, &all);
             }
             None => m.selected = all,
         }
@@ -487,11 +488,6 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
                 self.input("No shows selected. Press Enter...")?;
                 return Some(());
             }
-            let label_to_g = |label: &str| {
-                self.groups
-                    .iter()
-                    .position(|g| g.iter().any(|l| l == label))
-            };
             let max_name = visible
                 .iter()
                 .map(|s| s.label.chars().count())
@@ -500,7 +496,7 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
             let n_groups = self.groups.len();
             let mut rows = Vec::new();
             for (i, s) in visible.iter().enumerate() {
-                let tag = match label_to_g(&s.label) {
+                let tag = match groups::group_of(&self.groups, &s.label) {
                     Some(g) => format!("G{}", g + 1),
                     None => "●".into(),
                 };
@@ -553,29 +549,25 @@ impl<'a, R: BufRead, W: Write> Menu<'a, R, W> {
                         }
                     }
                     if !new_group.is_empty() {
-                        layout::create_group(&mut self.groups, &new_group);
+                        groups::create(&mut self.groups, &new_group);
                     }
                 }
                 ("a", 3) => {
-                    // Python checks the group index against the list *before* removal.
                     if let (Some(g), Some(i)) = (
                         index(tokens[1], self.groups.len()),
                         index(tokens[2], visible.len()),
                     ) {
-                        layout::add_to_group(&mut self.groups, g, &visible[i].label);
+                        groups::add(&mut self.groups, g, std::slice::from_ref(&visible[i].label));
                     }
                 }
                 ("r", 2) => {
                     if let Some(i) = index(tokens[1], visible.len()) {
-                        layout::remove_from_groups(
-                            &mut self.groups,
-                            std::slice::from_ref(&visible[i].label),
-                        );
+                        groups::remove(&mut self.groups, std::slice::from_ref(&visible[i].label));
                     }
                 }
                 ("d", 2) => {
                     if let Some(g) = index(tokens[1], self.groups.len()) {
-                        layout::dissolve_group(&mut self.groups, g);
+                        groups::dissolve(&mut self.groups, g);
                     }
                 }
                 _ => {}

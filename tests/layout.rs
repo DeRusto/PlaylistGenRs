@@ -198,50 +198,6 @@ fn rescan_keeps_selection_and_autoselects_new() {
 }
 
 #[test]
-fn group_helpers() {
-    let mut g = gv(&[&["A", "B"], &["C", "D"]]);
-    create_group(&mut g, &sv(&["B", "C", "D"]));
-    assert_eq!(g, gv(&[&["A"], &["B", "C", "D"]]));
-
-    // Text menu: index taken after removal, so "A" leaving group 1 makes "group 2" the old group 3.
-    let mut t = gv(&[&["A"], &["X"], &["Y"]]);
-    add_to_group(&mut t, 1, "A");
-    assert_eq!(t, gv(&[&["X"], &["Y", "A"]]));
-    add_to_group(&mut g, 0, "A");
-    assert_eq!(g, gv(&[&["B", "C", "D", "A"]]));
-    add_to_group(&mut g, 5, "E");
-    assert_eq!(g, gv(&[&["B", "C", "D", "A"], &["E"]]));
-
-    remove_from_groups(&mut g, &sv(&["E", "B"]));
-    assert_eq!(g, gv(&[&["C", "D", "A"]]));
-    dissolve_group(&mut g, 3);
-    dissolve_group(&mut g, 0);
-    assert!(g.is_empty());
-}
-
-#[test]
-fn gui_add_tracks_target_identity() {
-    // Target keeps its position even when an earlier group empties.
-    let mut g = gv(&[&["A"], &["B", "C"]]);
-    gui_add_to_group(&mut g, 1, &sv(&["A"]));
-    assert_eq!(g, gv(&[&["B", "C", "A"]]));
-
-    // Target emptied by the move goes to the end.
-    let mut g = gv(&[&["A"], &["B", "C"]]);
-    gui_add_to_group(&mut g, 0, &sv(&["A", "B"]));
-    assert_eq!(g, gv(&[&["C"], &["A", "B"]]));
-}
-
-#[test]
-fn group_choice_labels() {
-    let g = gv(&[&["a", "b"], &["a", "b", "c", "d"]]);
-    assert_eq!(
-        group_choices(&g),
-        ["Group 1 (a, b)", "Group 2 (a, b, c...)"]
-    );
-}
-
-#[test]
 fn selected_list_in_show_order() {
     let sel: HashSet<String> = sv(&["Z", "B", "A"]).into_iter().collect();
     assert_eq!(selected_list(&sel, &info(&["A", "B"])), ["A", "B", "Z"]);

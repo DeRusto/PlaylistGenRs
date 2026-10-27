@@ -4,6 +4,7 @@
 
 pub mod build;
 pub mod cli;
+pub mod groups;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod interleave;

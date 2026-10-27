@@ -3,7 +3,7 @@
 use super::dialogs::{self, Dialog, Outcome};
 use super::state::{GuiState, Kind, Msg, msg};
 use crate::build::{BuildReport, Mode, ShowOrder, build_playlist};
-use crate::layout;
+use crate::groups;
 use eframe::egui::{self, Key, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
 use egui_file_dialog::FileDialog;
@@ -128,7 +128,7 @@ impl App {
 
     fn handle_dialog(&mut self, ctx: &egui::Context) {
         let layouts = self.s.layout_names();
-        let groups = layout::group_choices(&self.s.groups);
+        let groups = groups::choices(&self.s.groups);
         let Some(top) = self.dialogs.last_mut() else {
             return;
         };

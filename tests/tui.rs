@@ -138,6 +138,24 @@ fn selection_and_groups_screens() {
 }
 
 #[test]
+fn add_to_group_uses_numbers_as_listed() {
+    let t = TempDir::new().unwrap();
+    let tv = t.path().join("tv");
+    tree(
+        &tv,
+        &[("A", &["a.mkv"]), ("B", &["b.mkv"]), ("C", &["c.mkv"])],
+    );
+    let lf = t.path().join("l.json");
+    // Groups [A] [B] [C]; moving A into group 2 empties group 1, but A still joins B.
+    drive(
+        &lf,
+        &format!("a\n{}\nG\ng 1\ng 2\ng 3\na 2 1\nb\nq\n", tv.display()),
+    );
+    let s = LayoutStore::new(lf).get_layout(LAST_SESSION).unwrap();
+    assert_eq!(s.groups, [vec!["B", "A"], vec!["C"]]);
+}
+
+#[test]
 fn eof_exits_cleanly_anywhere() {
     let t = TempDir::new().unwrap();
     for script in ["", "a\n", "s\n", "o"] {

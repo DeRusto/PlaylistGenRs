@@ -1,5 +1,5 @@
 //! Layout persistence, compatible with the Python app's `playlist_layouts.json`,
-//! plus the selection/group editing helpers shared by the text menu and GUI.
+//! plus the selection helpers shared by the text menu and GUI.
 
 use crate::build::{Mode, ShowOrder};
 use crate::scan::ShowInfo;
@@ -248,20 +248,6 @@ pub fn labels(info: &[ShowInfo]) -> HashSet<String> {
     info.iter().map(|s| s.label.clone()).collect()
 }
 
-/// Keep only labels in `known`, dropping groups that end up empty.
-pub fn filter_groups(groups: &[Vec<String>], known: &HashSet<String>) -> Vec<Vec<String>> {
-    groups
-        .iter()
-        .map(|g| {
-            g.iter()
-                .filter(|l| known.contains(*l))
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .filter(|g| !g.is_empty())
-        .collect()
-}
-
 /// After a rescan: keep surviving selections, auto-select newly discovered shows,
 /// strip missing labels from groups.
 pub fn rescan(
@@ -273,7 +259,7 @@ pub fn rescan(
     let new = labels(new_info);
     selected.retain(|l| new.contains(l));
     selected.extend(new.difference(old_labels).cloned());
-    *groups = filter_groups(groups, &new);
+    *groups = crate::groups::retain_known(groups, &new);
 }
 
 /// Selected labels in a stable order (show order first, then any others sorted).
@@ -292,75 +278,4 @@ pub fn selected_list(selected: &HashSet<String>, info: &[ShowInfo]) -> Vec<Strin
     rest.sort();
     out.extend(rest);
     out
-}
-
-/// Remove `labels` from every group, dropping groups that end up empty.
-pub fn remove_from_groups(groups: &mut Vec<Vec<String>>, labels: &[String]) {
-    for g in groups.iter_mut() {
-        g.retain(|l| !labels.contains(l));
-    }
-    groups.retain(|g| !g.is_empty());
-}
-
-/// New group from `labels` (taken out of any other group first), appended at the end.
-pub fn create_group(groups: &mut Vec<Vec<String>>, labels: &[String]) {
-    remove_from_groups(groups, labels);
-    groups.push(labels.to_vec());
-}
-
-/// Text menu `a <g#> <n>`: move `label` into group `g_idx`. Indexes are taken *after* the
-/// label is removed from its old group, so they can shift (Python behavior, kept as is);
-/// an out-of-range index appends a new group.
-pub fn add_to_group(groups: &mut Vec<Vec<String>>, g_idx: usize, label: &str) {
-    remove_from_groups(groups, &[label.to_string()]);
-    match groups.get_mut(g_idx) {
-        Some(g) => g.push(label.to_string()),
-        None => groups.push(vec![label.to_string()]),
-    }
-}
-
-/// GUI "Add Selected to Group": the target group is tracked by identity, so it keeps its
-/// position unless removing `labels` empties it, in which case it moves to the end.
-pub fn gui_add_to_group(groups: &mut Vec<Vec<String>>, g_idx: usize, labels: &[String]) {
-    if g_idx >= groups.len() {
-        remove_from_groups(groups, labels);
-        groups.push(labels.to_vec());
-        return;
-    }
-    for g in groups.iter_mut() {
-        g.retain(|l| !labels.contains(l));
-    }
-    let mut target = groups[g_idx].clone();
-    let keep_position = !target.is_empty();
-    for l in labels {
-        if !target.contains(l) {
-            target.push(l.clone());
-        }
-    }
-    if keep_position {
-        groups[g_idx] = target;
-        groups.retain(|g| !g.is_empty());
-    } else {
-        groups.retain(|g| !g.is_empty());
-        groups.push(target);
-    }
-}
-
-pub fn dissolve_group(groups: &mut Vec<Vec<String>>, g_idx: usize) {
-    if g_idx < groups.len() {
-        groups.remove(g_idx);
-    }
-}
-
-/// `Group N (a, b, c...)` labels for group pickers: at most 3 names, then `...`.
-pub fn group_choices(groups: &[Vec<String>]) -> Vec<String> {
-    groups
-        .iter()
-        .enumerate()
-        .map(|(i, g)| {
-            let names = g.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
-            let more = if g.len() > 3 { "..." } else { "" };
-            format!("Group {} ({names}{more})", i + 1)
-        })
-        .collect()
 }

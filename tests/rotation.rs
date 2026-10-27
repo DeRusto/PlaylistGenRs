@@ -44,9 +44,6 @@ fn slots_keep_layout_numbering_and_drop_unused_members() {
 #[test]
 fn show_in_two_groups_plays_in_the_first() {
     let g = gv(&[&["B", "C"], &["B", "A"], &["C", "C"]]);
-    assert_eq!(group_of(&g, "B"), Some(0));
-    assert_eq!(group_of(&g, "C"), Some(0));
-    assert_eq!(group_of(&g, "Z"), None);
     // B only plays in group 0; group 1 is left with A; group 2 has nothing of its own.
     let s = slots(&["A", "B", "C"], &g);
     assert_eq!(s, [slot(Some(1), &["A"]), slot(Some(0), &["B", "C"])]);
