@@ -407,8 +407,8 @@ fn group_concatenates_members_and_repeats() {
 fn group_filtering_and_first_group_wins() {
     let t = TempDir::new().unwrap();
     abc(&t);
-    // "Missing" is dropped, the group of only-missing labels vanishes (numbering shifts),
-    // and ShowB stays in the first group that lists it.
+    // "Missing" is dropped but numbering follows the layout, and ShowB plays only in the
+    // first group that lists it.
     let g = groups(&[&["Missing"], &["ShowB", "ShowC"], &["ShowB", "ShowA"]]);
     let (r, _) = run(
         t.path(),
@@ -418,7 +418,7 @@ fn group_filtering_and_first_group_wins() {
         },
     );
     let names: Vec<_> = r.slots.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["Group 2 (ShowB, ShowA)", "Group 1 (ShowB, ShowC)"]);
+    assert_eq!(names, ["Group 3 (ShowA)", "Group 2 (ShowB, ShowC)"]);
 }
 
 #[test]

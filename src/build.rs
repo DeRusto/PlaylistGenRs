@@ -1,6 +1,7 @@
 //! Playlist building (Python `build_playlist`) and the M3U writer.
 
 use crate::interleave::{interleave, interleave_by_season, interleave_in_blocks};
+use crate::rotation::{self, Slot};
 use crate::scan::{collect_show_files, collect_show_seasons, py_os_error, scan_dirs};
 use rand::Rng;
 use rand::seq::SliceRandom;
@@ -142,28 +143,12 @@ pub fn build_playlist(
         .iter()
         .map(|(l, p)| (l.as_str(), p.as_slice()))
         .collect();
-    let groups: Vec<Vec<&str>> = opts
-        .groups
-        .iter()
-        .map(|g| {
-            g.iter()
-                .map(String::as_str)
-                .filter(|l| label_to_paths.contains_key(l))
-                .collect()
-        })
-        .filter(|g: &Vec<&str>| !g.is_empty())
-        .collect();
-    let mut label_to_group: HashMap<&str, usize> = HashMap::new();
-    for (i, g) in groups.iter().enumerate() {
-        for l in g {
-            label_to_group.entry(l).or_insert(i);
-        }
-    }
+    let used: Vec<&str> = entries.iter().map(|(l, _)| l.as_str()).collect();
 
     let seasons_mode = opts.mode == Mode::Seasons;
     // A slot is a list of seasons; in flat modes it is one "season" holding every episode.
-    let collect = |members: &[&str], warnings: &mut Vec<String>| -> Vec<Vec<PathBuf>> {
-        let paths = members.iter().map(|m| label_to_paths[m]);
+    let collect = |members: &[String], warnings: &mut Vec<String>| -> Vec<Vec<PathBuf>> {
+        let paths = members.iter().map(|m| label_to_paths[m.as_str()]);
         if seasons_mode {
             paths
                 .flat_map(|p| collect_show_seasons(p, warnings))
@@ -178,24 +163,18 @@ pub fn build_playlist(
         }
     };
 
-    let mut placed = HashSet::new();
     let mut slots: Vec<(String, Vec<Vec<PathBuf>>)> = Vec::new();
-    for (label, _) in &entries {
-        let (name, slot) = match label_to_group.get(label.as_str()) {
-            Some(&g) if !placed.insert(g) => continue,
-            Some(&g) => {
-                let mut members = groups[g].clone();
+    for Slot { group, mut members } in rotation::slots(&used, &opts.groups) {
+        let name = match group {
+            Some(g) => {
                 if random {
                     members.shuffle(rng);
                 }
-                let name = format!("Group {} ({})", g + 1, members.join(", "));
-                (name, collect(&members, &mut report.warnings))
+                format!("Group {} ({})", g + 1, members.join(", "))
             }
-            None => (
-                label.clone(),
-                collect(&[label.as_str()], &mut report.warnings),
-            ),
+            None => members[0].clone(),
         };
+        let slot = collect(&members, &mut report.warnings);
         if slot.is_empty() {
             report
                 .warnings

@@ -11,8 +11,8 @@ ShowB/  b1 b2 b3 b4 b5 b6 b7
 →  a1 b1 a2 b2 a3 b3 a4 b4 a5 b5 a6 b6 a7 b7 a8 a9
 ```
 
-Playlists, saved layouts and terminal output match the Python app. A parity test checks that
-both programs write byte-identical playlists (see [Testing](#testing)).
+It started as a port of the Python app and reads and writes the same layout file, but no
+longer promises identical output (see [ADR 0001](docs/adr/0001-drop-python-parity.md)).
 
 ## Launch modes
 
@@ -149,16 +149,6 @@ While connected, run `cargo vendor` and commit `vendor/` together with the
 
 ```bash
 make test
-```
-
-`tests/parity.rs` compares the output with the Python implementation across 80 combinations
-of media layout, mode, `--repeat` and `--relative`. It runs when `python3` is installed and
-the Python source is at `reference/playlist_gen.py` (or at the path in `$PLAYLISTGEN_PY`);
-otherwise it is skipped:
-
-```bash
-git clone -b claude/tv-playlist-interleaver-FcsHX https://github.com/DeRusto/PlaylistGen reference
-cargo test --test parity
 ```
 
 ## Differences from the Python version
